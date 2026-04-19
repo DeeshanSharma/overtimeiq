@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #0e0e0e;
+  --paper: #f5f0e8;
+  --amber: #d97706;
+  --amber-light: #fbbf24;
+  --amber-dim: #78350f;
+  --muted: #6b6b5e;
+  --rule: #d1c9b8;
+  --font-serif: 'DM Serif Display', Georgia, serif;
+  --font-mono: 'DM Mono', 'Courier New', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+}
+
+.font-serif { font-family: var(--font-serif); }
+.font-mono  { font-family: var(--font-mono); }
