@@ -12,6 +12,7 @@
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.103.0",
     "@types/sql.js": "^1.4.11",
+    "@vercel/analytics": "^2.0.1",
     "dayjs": "^1.11.20",
     "jose": "^6.2.2",
     "jspdf": "^4.2.1",
