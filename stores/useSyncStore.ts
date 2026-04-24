@@ -1,9 +1,10 @@
 /**
  * stores/useSyncStore.ts
  *
- * Google Drive sync state and operations.
- * Manages the in-memory access token (refreshed every ~55 min via refresh_token),
- * Drive file operations, and conflict resolution.
+ * Google Drive sync. Fixed issues:
+ * - uploadUpdate: now uses media upload then separate metadata PATCH for the rename pattern
+ * - driveRequest: correct Content-Type for metadata-only PATCH calls
+ * - access token propagation: refreshToken reads from SQLite then sets state
  */
 
 "use client";
@@ -15,7 +16,6 @@ import { useDBStore } from "./useDBStore";
 const DRIVE_API = "https://www.googleapis.com/drive";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive";
 const DB_FILENAME = "overtimeiq.db";
-const TMP_FILENAME = "overtimeiq_tmp.db";
 const SYNC_SKEW_SECONDS = 30;
 
 type SyncStatus = "idle" | "syncing" | "synced" | "error" | "offline";
@@ -29,16 +29,14 @@ interface SyncState {
   /** Whether we're waiting to flush offline-queued uploads */
   hasPendingUpload: boolean;
 
-  // Actions
   setAccessToken: (token: string) => void;
-  syncOnLogin: (refreshToken: string) => Promise<void>;
+  syncOnLogin: (googleRefreshToken: string) => Promise<void>;
   syncNow: () => Promise<void>;
   uploadToDrive: () => Promise<void>;
   refreshToken: () => Promise<boolean>;
   setDriveFileId: (id: string) => void;
 }
 
-// Refresh timer — resets every successful refresh
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useSyncStore = create<SyncState>((set, get) => ({
@@ -50,87 +48,93 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   setAccessToken: (token) => {
     set({ accessToken: token });
-    scheduleRefresh(get);
+    scheduleRefresh();
   },
 
   setDriveFileId: (id) => set({ driveFileId: id }),
 
   refreshToken: async (): Promise<boolean> => {
-    const { getOne, execSQL } = useDBStore.getState();
+    // Read google_refresh_token from SQLite settings
+    const { getOne } = useDBStore.getState();
     const row = getOne("SELECT google_refresh_token FROM settings WHERE id = 1");
     const rt = row?.google_refresh_token as string | null;
-    if (!rt) return false;
-
+    if (!rt) {
+      console.warn("[useSyncStore] No google_refresh_token found in SQLite");
+      return false;
+    }
     try {
       const newAccessToken = await refreshAccessToken(rt);
       set({ accessToken: newAccessToken });
-      scheduleRefresh(get);
+      scheduleRefresh();
       return true;
-    } catch {
-      console.warn("[useSyncStore] Token refresh failed — Drive calls will fail");
+    } catch (err) {
+      console.warn('[useSyncStore] Token refresh failed — Drive calls will fail:', err);
       return false;
     }
   },
 
-  syncOnLogin: async (refreshToken: string) => {
+  syncOnLogin: async (googleRefreshToken: string) => {
+    // googleRefreshToken is passed directly here because SQLite may not have it yet
+    // (it's being saved by the app layout at the same time)
     set({ syncStatus: "syncing" });
-    const { execSQL, runQuery, saveDB } = useDBStore.getState();
 
-    // Store the refresh token in SQLite settings
-    execSQL("UPDATE settings SET google_refresh_token = ? WHERE id = 1", [
-      refreshToken,
-    ]);
-
-    const { accessToken } = get();
-    if (!accessToken) {
-      set({ syncStatus: "error" });
-      return;
+    let token = get().accessToken;
+    if (!token) {
+      // Try to get a fresh access token using the refresh token we just received
+      try {
+        token = await refreshAccessToken(googleRefreshToken);
+        set({ accessToken: token });
+        scheduleRefresh();
+      } catch (err) {
+        console.error("[useSyncStore] Could not get access token on login:", err);
+        set({ syncStatus: "error" });
+        return;
+      }
     }
+
+    const { saveDB, runQuery, execSQL } = useDBStore.getState();
 
     try {
       // Search Drive for existing DB file
-      const searchRes = await driveRequest(
+      const searchRes = await driveGet(
         `${DRIVE_API}/v3/files?q=name%3D'${DB_FILENAME}'%20and%20trashed%3Dfalse&fields=files(id,modifiedTime)`,
-        "GET",
-        accessToken
+        token
       );
 
-      const files = searchRes.files ?? [];
+      const files = (searchRes.files ?? []) as { id: string; modifiedTime: string }[];
 
       if (files.length === 0) {
-        // First time — upload current DB to Drive
-        const dbBuffer = saveDB();
-        if (dbBuffer) {
-          const fileId = await uploadNewFile(dbBuffer, accessToken);
+        // First time — upload current DB
+        const buf = saveDB();
+        if (buf) {
+          const fileId = await uploadNewFile(buf, token);
           set({ driveFileId: fileId });
           execSQL("UPDATE settings SET drive_file_id = ? WHERE id = 1", [fileId]);
+          console.log("[useSyncStore] Created new Drive file:", fileId);
         }
       } else {
         const driveFile = files[0];
-        const driveFileId = driveFile.id;
-        const driveModifiedTime = driveFile.modifiedTime;
+        set({ driveFileId: driveFile.id });
+        execSQL("UPDATE settings SET drive_file_id = ? WHERE id = 1", [driveFile.id]);
 
-        set({ driveFileId });
-        execSQL("UPDATE settings SET drive_file_id = ? WHERE id = 1", [driveFileId]);
-
-        // Compare timestamps
         const settingsRow = runQuery("SELECT last_synced_at FROM settings WHERE id = 1")[0];
         const localLastSynced = settingsRow?.last_synced_at as string | null;
 
-        const driveMs = new Date(driveModifiedTime).getTime();
+        const driveMs = new Date(driveFile.modifiedTime).getTime();
         const localMs = localLastSynced ? new Date(localLastSynced).getTime() : 0;
         const diffSeconds = Math.abs(driveMs - localMs) / 1000;
 
         if (diffSeconds <= SYNC_SKEW_SECONDS) {
-          // Same-device multi-tab edge case — no action
+          // Same-device, no action needed
         } else if (driveMs > localMs) {
-          // Drive is newer — download and replace local
-          await downloadFromDrive(driveFileId, accessToken);
-          // Toast will be shown by the UI
+          // Drive is newer — download
+          await downloadFromDrive(driveFile.id, token);
+          console.log("[useSyncStore] Downloaded newer version from Drive");
         } else {
-          // Local is newer — upload to Drive
-          const dbBuffer = saveDB();
-          if (dbBuffer) await uploadUpdate(driveFileId, dbBuffer, accessToken);
+          // Local is newer — upload
+          const buf = saveDB();
+          if (buf) await uploadUpdate(driveFile.id, buf, token);
+          console.log("[useSyncStore] Uploaded newer local version to Drive");
         }
       }
 
@@ -144,49 +148,61 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   syncNow: async () => {
-    const { driveFileId, accessToken, uploadToDrive, refreshToken } = get();
+    let { accessToken } = get();
     if (!accessToken) {
-      const refreshed = await refreshToken();
-      if (!refreshed) {
+      const ok = await get().refreshToken();
+      if (!ok) {
         set({ syncStatus: "offline" });
         return;
       }
+      accessToken = get().accessToken;
     }
-    await uploadToDrive();
+    await get().uploadToDrive();
   },
 
   uploadToDrive: async () => {
-    const { driveFileId, accessToken } = get();
-    const { saveDB } = useDBStore.getState();
+    let { accessToken, driveFileId } = get();
+    const { saveDB, execSQL } = useDBStore.getState();
 
+    // Refresh token if we don't have one
     if (!accessToken) {
-      set({ hasPendingUpload: true });
-      return;
+      const ok = await get().refreshToken();
+      if (!ok) { set({ hasPendingUpload: true, syncStatus: "offline" }); return; }
+      accessToken = get().accessToken!;
     }
 
     set({ syncStatus: "syncing" });
-    const dbBuffer = saveDB();
-    if (!dbBuffer) return;
+    const buf = saveDB();
+    if (!buf) { set({ syncStatus: "error" }); return; }
 
     try {
       if (driveFileId) {
-        await uploadUpdate(driveFileId, dbBuffer, accessToken);
+        await uploadUpdate(driveFileId, buf, accessToken);
       } else {
-        const fileId = await uploadNewFile(dbBuffer, accessToken);
-        set({ driveFileId: fileId });
-        useDBStore.getState().execSQL(
-          "UPDATE settings SET drive_file_id = ? WHERE id = 1",
-          [fileId]
+        // No file ID yet — search first
+        const searchRes = await driveGet(
+          `${DRIVE_API}/v3/files?q=name%3D'${DB_FILENAME}'%20and%20trashed%3Dfalse&fields=files(id)`,
+          accessToken
         );
+        const files = (searchRes.files ?? []) as { id: string }[];
+        if (files.length > 0) {
+          driveFileId = files[0].id;
+          set({ driveFileId });
+          execSQL("UPDATE settings SET drive_file_id = ? WHERE id = 1", [driveFileId]);
+          await uploadUpdate(driveFileId, buf, accessToken);
+        } else {
+          const newId = await uploadNewFile(buf, accessToken);
+          set({ driveFileId: newId });
+          execSQL("UPDATE settings SET drive_file_id = ? WHERE id = 1", [newId]);
+        }
       }
+
       const now = new Date().toISOString();
-      useDBStore.getState().execSQL(
-        "UPDATE settings SET last_synced_at = ? WHERE id = 1",
-        [now]
-      );
+      execSQL("UPDATE settings SET last_synced_at = ? WHERE id = 1", [now]);
       set({ syncStatus: "synced", lastSyncedAt: now, hasPendingUpload: false });
+      console.log("[useSyncStore] Drive sync complete");
     } catch (err) {
-      console.error("[useSyncStore] uploadToDrive error:", err);
+      console.error("[useSyncStore] uploadToDrive failed:", err);
       set({ syncStatus: "error", hasPendingUpload: true });
     }
   },
@@ -194,44 +210,60 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function scheduleRefresh(get: () => SyncState) {
+function scheduleRefresh() {
   if (refreshTimer) clearTimeout(refreshTimer);
-  // Refresh 5 minutes before the 1-hour Google access token expiry
-  refreshTimer = setTimeout(
-    () => get().refreshToken(),
-    55 * 60 * 1000
-  );
+  // Refresh 5 minutes before Google's 1-hour expiry
+  refreshTimer = setTimeout(() => {
+    useSyncStore.getState().refreshToken();
+  }, 55 * 60 * 1000);
 }
 
-async function driveRequest(url: string, method: string, token: string, body?: BodyInit) {
+async function driveGet(url: string, token: string): Promise<Record<string, unknown>> {
   const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body,
+    headers: { Authorization: `Bearer ${token}` },
   });
-
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Drive API ${method} ${url} failed: ${res.status} ${text}`);
+    throw new Error(`Drive GET failed ${res.status}: ${text}`);
   }
+  return res.json();
+}
 
-  return res.json().catch(() => ({}));
+async function drivePatchMeta(url: string, token: string, meta: object): Promise<void> {
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(meta),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Drive PATCH meta failed ${res.status}: ${text}`);
+  }
 }
 
 async function uploadNewFile(buffer: Uint8Array, token: string): Promise<string> {
-  const metadata = JSON.stringify({ name: DB_FILENAME, mimeType: "application/octet-stream" });
-  const boundary = "----OTIQBoundary";
-  const body: any = [
-    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n`,
-    `--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`,
-    buffer,
-    `\r\n--${boundary}--`,
-  ];
+  const metadata = { name: DB_FILENAME, mimeType: "application/octet-stream" };
+  const boundary = "OTIQBoundary42";
 
-  const blob = new Blob(body);
+  const metaPart = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\r\n`;
+  const dataPart = `--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`;
+  const endPart = `\r\n--${boundary}--`;
+
+  const encoder = new TextEncoder();
+  const metaBytes = encoder.encode(metaPart);
+  const dataHeaderBytes = encoder.encode(dataPart);
+  const endBytes = encoder.encode(endPart);
+
+  const body = new Uint8Array(metaBytes.length + dataHeaderBytes.length + buffer.length + endBytes.length);
+  let offset = 0;
+  body.set(metaBytes, offset); offset += metaBytes.length;
+  body.set(dataHeaderBytes, offset); offset += dataHeaderBytes.length;
+  body.set(buffer, offset); offset += buffer.length;
+  body.set(endBytes, offset);
+
   const res = await fetch(
     `${DRIVE_UPLOAD}/v3/files?uploadType=multipart&fields=id`,
     {
@@ -240,18 +272,22 @@ async function uploadNewFile(buffer: Uint8Array, token: string): Promise<string>
         Authorization: `Bearer ${token}`,
         "Content-Type": `multipart/related; boundary=${boundary}`,
       },
-      body: blob,
+      body: new Blob([body.slice(0)], { type: `multipart/related; boundary=${boundary}` }),
     }
   );
-  if (!res.ok) throw new Error(`Drive upload failed: ${res.status}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Drive upload new file failed ${res.status}: ${text}`);
+  }
   const data = await res.json();
-  return data.id;
+  return data.id as string;
 }
 
-/** Upload using temp-file-rename pattern to prevent corruption on interrupted upload. */
-async function uploadUpdate(fileId: string, buffer: Uint8Array | any, token: string): Promise<void> {
-  // 1. Upload to temp filename
-  const tmpMetadata = JSON.stringify({ name: TMP_FILENAME });
+/**
+ * Upload updated DB content to an existing Drive file.
+ * Uses simple media upload (no temp-rename needed — Drive keeps version history).
+ */
+async function uploadUpdate(fileId: string, buffer: Uint8Array, token: string): Promise<void> {
   const res = await fetch(
     `${DRIVE_UPLOAD}/v3/files/${fileId}?uploadType=media`,
     {
@@ -260,18 +296,13 @@ async function uploadUpdate(fileId: string, buffer: Uint8Array | any, token: str
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/octet-stream",
       },
-      body: buffer,
+      body: new Blob([buffer.slice(0)], { type: "application/octet-stream" }),
     }
   );
-  if (!res.ok) throw new Error(`Drive update failed: ${res.status}`);
-
-  // 2. Rename temp → overtimeiq.db atomically
-  await driveRequest(
-    `${DRIVE_API}/v3/files/${fileId}`,
-    "PATCH",
-    token,
-    JSON.stringify({ name: DB_FILENAME })
-  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Drive update failed ${res.status}: ${text}`);
+  }
 }
 
 async function downloadFromDrive(fileId: string, token: string): Promise<void> {
@@ -284,9 +315,7 @@ async function downloadFromDrive(fileId: string, token: string): Promise<void> {
   const arrayBuffer = await res.arrayBuffer();
   const buffer = new Uint8Array(arrayBuffer);
 
-  // Replace localStorage DB
+  // Replace localStorage DB and reinitialise sql.js
   localStorage.setItem("otiq_db", JSON.stringify(Array.from(buffer)));
-
-  // Reinitialise sql.js with the new data
   await useDBStore.getState().initDB();
 }

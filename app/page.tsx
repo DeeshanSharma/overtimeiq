@@ -86,6 +86,7 @@ export default function LandingPage() {
         <div style={{ display: "flex", gap: "28px", fontSize: "0.78rem", ...s.muted }}>
           <a href="#features" style={{ color: "inherit", textDecoration: "none" }}>Features</a>
           <a href="#pricing" style={{ color: "inherit", textDecoration: "none" }}>Pricing</a>
+          <a href="/login" style={{ color: "inherit", textDecoration: "none" }}>Sign in</a>
         </div>
       </nav>
 

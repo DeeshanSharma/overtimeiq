@@ -33,7 +33,7 @@ export type ImportStep =
 interface UIState {
   activeTab: Tab;
   activeModal: ModalType;
-  modalData: Record<string, unknown> | null;
+  modalData: Record<string, unknown> | null | undefined;
   toasts: Toast[];
   importStep: ImportStep;
   storageDurabilityWarning: boolean;
@@ -42,7 +42,7 @@ interface UIState {
   setTab: (tab: Tab) => void;
 
   // Modal management
-  openModal: (modal: ModalType, data?: Record<string, unknown>) => void;
+  openModal: (modal: ModalType, data?: Record<string, unknown> | null) => void;
   closeModal: () => void;
 
   // Toast system
@@ -61,14 +61,14 @@ let toastIdCounter = 0;
 export const useUIStore = create<UIState>((set, get) => ({
   activeTab: "log",
   activeModal: null,
-  modalData: null,
+  modalData: undefined,
   toasts: [],
   importStep: null,
   storageDurabilityWarning: false,
 
   setTab: (tab) => set({ activeTab: tab }),
 
-  openModal: (modal, data: any = null) => set({ activeModal: modal, modalData: data }),
+  openModal: (modal, data = undefined) => set({ activeModal: modal, modalData: data }),
   closeModal: () => set({ activeModal: null, modalData: null }),
 
   addToast: (toast) => {

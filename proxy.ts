@@ -44,8 +44,7 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Routes that require authentication
-  const isAppRoute =
-    pathname.startsWith('/log') || pathname.startsWith('/dashboard') || pathname.startsWith('/settings');
+  const isAppRoute = ['/log', '/dashboard', '/settings'].includes(pathname);
 
   // Routes only for unauthenticated users
   const isAuthRoute = pathname === '/' || pathname.startsWith('/join/');
@@ -53,14 +52,14 @@ export async function proxy(request: NextRequest) {
   if (!user && isAppRoute) {
     // Not logged in — send to landing page
     const url = request.nextUrl.clone();
-    url.pathname = '/';
+    url.pathname = '/login';
     return NextResponse.redirect(url);
   }
 
-  if (user && pathname === '/') {
+  if (user && (pathname === '/' || pathname === '/login')) {
     // Already logged in — send to the app
     const url = request.nextUrl.clone();
-    url.pathname = '/log';
+    url.pathname = '/dashboard';
     return NextResponse.redirect(url);
   }
 

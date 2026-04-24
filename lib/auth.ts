@@ -11,15 +11,10 @@
  *  - id_token      → passed to Supabase signInWithIdToken(), then discarded
  */
 
-const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
-const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
-const SCOPES = [
-  "openid",
-  "email",
-  "profile",
-  "https://www.googleapis.com/auth/drive.file",
-].join(" ");
+const SCOPES = ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file'].join(' ');
 
 // ─── PKCE helpers ─────────────────────────────────────────────────────────────
 
@@ -34,15 +29,15 @@ export function generateVerifier(): string {
 export async function generateChallenge(verifier: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(verifier);
-  const hash = await crypto.subtle.digest("SHA-256", data);
+  const hash = await crypto.subtle.digest('SHA-256', data);
   return base64urlEncode(new Uint8Array(hash));
 }
 
 function base64urlEncode(buffer: Uint8Array): string {
   return btoa(String.fromCharCode(...buffer))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
 }
 
 // ─── Auth URL builder ─────────────────────────────────────────────────────────
@@ -55,26 +50,22 @@ export interface BuildAuthURLOptions {
   redirectUri?: string;
 }
 
-export function buildAuthURL({
-  challenge,
-  loginHint,
-  redirectUri,
-}: BuildAuthURLOptions): string {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+export function buildAuthURL({ challenge, loginHint, redirectUri }: BuildAuthURLOptions): string {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
+  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? '';
 
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri ?? `${appUrl}/auth/callback`,
-    response_type: "code",
+    response_type: 'code',
     scope: SCOPES,
     code_challenge: challenge,
-    code_challenge_method: "S256",
+    code_challenge_method: 'S256',
     // Required to receive refresh_token
-    access_type: "offline",
+    access_type: 'offline',
     // Forces consent screen so Google always issues a refresh_token.
     // Without this, subsequent logins skip consent and omit refresh_token.
-    prompt: "consent",
+    prompt: 'consent',
     ...(loginHint ? { login_hint: loginHint } : {}),
   });
 
@@ -92,17 +83,15 @@ export interface GoogleTokenResponse {
   scope: string;
 }
 
-export async function exchangeCode(
-  code: string,
-  verifier: string,
-  redirectUri: string
-): Promise<GoogleTokenResponse> {
-  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+export async function exchangeCode(code: string, verifier: string, redirectUri: string): Promise<GoogleTokenResponse> {
+  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? '';
+  // Google requires client_secret for Web application OAuth clients even in PKCE flows.
+  // This runs server-side only (in /auth/callback/route.ts) — never exposed to the browser.
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? '';
 
   const body = new URLSearchParams({
     client_id: clientId,
-    client_secret: clientSecret,
+    ...(clientSecret ? { client_secret: clientSecret } : {}),
     code,
     code_verifier: verifier,
     grant_type: 'authorization_code',
@@ -110,8 +99,8 @@ export async function exchangeCode(
   });
 
   const res = await fetch(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
   });
 
@@ -130,25 +119,23 @@ export async function exchangeCode(
  * Called every ~55 minutes by useSyncStore, or on Drive 401.
  * Returns the new access_token (stored in memory; never written to server).
  */
-export async function refreshAccessToken(
-  refreshToken: string
-): Promise<string> {
-  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+export async function refreshAccessToken(refreshToken: string): Promise<string> {
+  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? '';
 
   const body = new URLSearchParams({
     client_id: clientId,
     refresh_token: refreshToken,
-    grant_type: "refresh_token",
+    grant_type: 'refresh_token',
   });
 
   const res = await fetch(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
   });
 
   if (!res.ok) {
-    throw new Error("Google access token refresh failed");
+    throw new Error('Google access token refresh failed');
   }
 
   const data = await res.json();
@@ -160,9 +147,9 @@ export async function refreshAccessToken(
 /** Decode the JWT payload from Google's id_token — no signature verification
  *  needed because we received this directly from Google over HTTPS. */
 export function decodeIdToken(idToken: string): Record<string, unknown> {
-  const parts = idToken.split(".");
-  if (parts.length !== 3) throw new Error("Invalid id_token format");
+  const parts = idToken.split('.');
+  if (parts.length !== 3) throw new Error('Invalid id_token format');
   const payload = parts[1];
-  const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+  const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
   return JSON.parse(atob(padded));
 }

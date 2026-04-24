@@ -16,7 +16,7 @@ interface ActiveSession {
   job_id: number;
   punch_in_time: string;
   location: string;
-  project: string | null;
+  project: string | null | undefined;
   auto_timeout_at: string;
 }
 
@@ -26,7 +26,7 @@ interface SessionState {
   isLoaded: boolean;
 
   loadSession: () => void;
-  punchIn: (jobId: number, location: string, project?: string) => void;
+  punchIn: (jobId: number, location: string, project?: string | null | undefined) => void;
   punchOut: () => { duration: number; crossesMidnight: boolean } | null;
   clearSession: () => void;
   tickElapsed: () => void;
@@ -56,7 +56,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  punchIn: (jobId, location, project: string | null = null) => {
+  punchIn: (jobId, location, project = undefined) => {
     const { execSQL } = useDBStore.getState();
     const now = new Date().toISOString();
     const autoTimeoutAt = dayjs().add(AUTO_TIMEOUT_HOURS, "hour").toISOString();
@@ -65,7 +65,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     execSQL(
       `INSERT INTO active_session (id, job_id, punch_in_time, location, project, auto_timeout_at)
        VALUES (1, ?, ?, ?, ?, ?)`,
-      [jobId, now, location, project, autoTimeoutAt]
+      [jobId, now, location, project ?? null, autoTimeoutAt]
     );
 
     const session: ActiveSession = { job_id: jobId, punch_in_time: now, location, project, auto_timeout_at: autoTimeoutAt };
@@ -100,8 +100,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   tickElapsed: () => set((s) => ({ elapsed: s.elapsed + 1 })),
 }));
 
-// @ts-ignore
-function startTick(set: ReturnType<typeof create<SessionState>>["setState"] extends never ? never : typeof import("zustand").create<SessionState> extends (f: (set: infer S) => unknown) => unknown ? S : never, get: () => SessionState) {
+function startTick(set: unknown, get: () => SessionState) {
   if (tickInterval) clearInterval(tickInterval);
   tickInterval = setInterval(() => {
     get().tickElapsed();
@@ -132,7 +131,7 @@ function triggerAutoTimeout(get: () => SessionState) {
       location, project, status, is_auto_punched_out, source, created_at, updated_at)
      VALUES (?, ?, ?, '00:00', 0, ?, ?, ?, 'draft', 1, 'punch', ?, ?)`,
     [activeSession.job_id, punchInDate, punchInTime,
-     AUTO_TIMEOUT_DURATION, activeSession.location, activeSession.project, now, now]
+     AUTO_TIMEOUT_DURATION, activeSession.location, activeSession.project ?? null, now, now]
   );
 
   execSQL("DELETE FROM active_session");

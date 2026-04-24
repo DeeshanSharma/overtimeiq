@@ -20,10 +20,9 @@ export default function InviteClaimClient({ token, email, planGrant }: Props) {
     const challenge = await generateChallenge(verifier);
     const authUrl = buildAuthURL({ challenge, loginHint: email });
 
-    // Store verifier in a cookie so the callback route can retrieve it.
-    // We use document.cookie directly because this runs before any response can set a cookie.
-    // The callback route reads and clears this cookie.
-    document.cookie = `pkce_verifier=${verifier}; path=/; max-age=300; samesite=lax${location.protocol === "https:" ? "; secure" : ""}`;
+    // Store verifier in sessionStorage — survives the Google redirect back to /auth/callback.
+    // The callback route reads it from there instead of a cookie.
+    sessionStorage.setItem("pkce_verifier", verifier);
 
     window.location.href = authUrl;
   }
@@ -42,48 +41,25 @@ export default function InviteClaimClient({ token, email, planGrant }: Props) {
           Sign in with Google to claim your account.
         </p>
 
-        {/* Plan badge */}
         <div style={{ padding: "12px 16px", border: "1px solid #d97706", background: "#fffbeb", marginBottom: "32px" }}>
-          <p style={{ fontSize: "0.7rem", letterSpacing: "0.08em", color: "#d97706", textTransform: "uppercase", margin: 0 }}>
-            Your plan
-          </p>
-          <p style={{ fontSize: "0.85rem", color: "#78350f", margin: "3px 0 0", fontWeight: 500 }}>
-            {planLabel}
-          </p>
+          <p style={{ fontSize: "0.7rem", letterSpacing: "0.08em", color: "#d97706", textTransform: "uppercase", margin: 0 }}>Your plan</p>
+          <p style={{ fontSize: "0.85rem", color: "#78350f", margin: "3px 0 0", fontWeight: 500 }}>{planLabel}</p>
         </div>
 
-        {/* Sign in button */}
         <button
           onClick={handleSignIn}
-          style={{
-            width: "100%",
-            padding: "14px 24px",
-            background: "#0e0e0e",
-            color: "#f5f0e8",
-            border: "none",
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.85rem",
-            fontWeight: 500,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "12px",
-          }}
+          style={{ width: "100%", padding: "14px 24px", background: "#0e0e0e", color: "#f5f0e8", border: "none", fontFamily: "var(--font-mono)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "12px" }}
         >
           <GoogleIcon />
           Continue with Google
         </button>
 
         <p style={{ fontSize: "0.72rem", color: "#6b6b5e", marginTop: "20px", lineHeight: 1.6 }}>
-          By signing in you agree to use this app for personal overtime tracking.
           Your work data lives only on your Google Drive — we can&apos;t access it.
         </p>
 
         <div style={{ borderTop: "1px solid #d1c9b8", marginTop: "32px", paddingTop: "24px" }}>
-          <a href="/" style={{ fontSize: "0.72rem", color: "#6b6b5e", textDecoration: "none", borderBottom: "1px solid currentColor" }}>
-            ← Back to homepage
-          </a>
+          <a href="/" style={{ fontSize: "0.72rem", color: "#6b6b5e", textDecoration: "none", borderBottom: "1px solid currentColor" }}>← Back to homepage</a>
         </div>
       </div>
     </div>

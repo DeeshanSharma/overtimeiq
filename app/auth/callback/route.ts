@@ -1,21 +1,3 @@
-/**
- * app/auth/callback/route.ts
- *
- * PKCE code exchange flow (Section 7.1, Steps 5–8):
- *  1. Receive ?code from Google redirect
- *  2. Retrieve code_verifier from cookie (set during login initiation)
- *  3. Exchange code + verifier → access_token, refresh_token, id_token
- *  4. Pass id_token to supabase.auth.signInWithIdToken()
- *  5. Check users.status and route accordingly:
- *     - waitlist → /waitlist
- *     - invited  → mark invite used, seed subscription, → /log
- *     - beta/active → /log
- *
- * The refresh_token is NOT stored here — it's saved to SQLite by useSettingsStore
- * after the DB initialises on first app load (Steps 9 of the spec flow).
- * We pass it to the app via a short-lived HttpOnly cookie that the client reads once.
- */
-
 import { exchangeCode } from '@/lib/auth';
 import { getSupabaseServiceClient } from '@/lib/supabase/server';
 import dayjs from 'dayjs';
@@ -25,28 +7,23 @@ export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
   const error = searchParams.get('error');
+  const verifier = searchParams.get('verifier');
 
-  // Google returned an error (user denied consent, etc.)
   if (error) {
-    return NextResponse.redirect(`${origin}/?error=${encodeURIComponent(error)}`);
+    return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(error)}`);
   }
-
   if (!code) {
-    return NextResponse.redirect(`${origin}/?error=missing_code`);
+    return NextResponse.redirect(`${origin}/login?error=missing_code`);
   }
-
-  // Retrieve the PKCE verifier from cookie (set during login initiation)
-  const verifier = request.cookies.get('pkce_verifier')?.value;
+  // No verifier yet — redirect to processing page which reads it from sessionStorage
   if (!verifier) {
-    return NextResponse.redirect(`${origin}/?error=missing_verifier`);
+    return NextResponse.redirect(`${origin}/auth/processing?code=${code}`);
   }
 
   try {
-    // Exchange code → tokens
     const redirectUri = `${origin}/auth/callback`;
     const tokens = await exchangeCode(code, verifier, redirectUri);
 
-    // Sign in to Supabase using the id_token
     const supabase = await getSupabaseServiceClient();
     const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({
       provider: 'google',
@@ -55,24 +32,23 @@ export async function GET(request: NextRequest) {
 
     if (authError || !authData.user) {
       console.error('[auth/callback] signInWithIdToken failed:', authError);
-      return NextResponse.redirect(`${origin}/?error=auth_failed`);
+      return NextResponse.redirect(`${origin}/login?error=auth_failed`);
     }
 
-    const supabaseUserId = authData.user.id;
-    const userEmail = authData.user.email!;
-    const googleId = authData.user.user_metadata?.sub ?? authData.user.id;
+    const uid = authData.user.id;
+    const email = authData.user.email!;
+    const googleId = (authData.user.user_metadata?.sub as string) ?? uid;
 
-    // Check or create users row
-    const { data: existingUser } = await supabase.from('users').select('id, status').eq('id', supabaseUserId).single();
+    const { data: existingUser } = await supabase.from('users').select('id, status').eq('id', uid).single();
 
-    let userStatus = existingUser?.status ?? null;
+    let status = existingUser?.status ?? null;
 
     if (!existingUser) {
-      // First-ever login — check if they have a pending invite
+      // Check for valid pending invite
       const { data: invite } = await supabase
         .from('invites')
-        .select('id, plan_grant, used_at, expires_at')
-        .eq('email', userEmail)
+        .select('id, plan_grant')
+        .eq('email', email)
         .is('used_at', null)
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false })
@@ -81,24 +57,22 @@ export async function GET(request: NextRequest) {
 
       if (!invite) {
         // No valid invite — create user with waitlist status
-        await supabase.from('users').insert({
-          id: supabaseUserId,
-          email: userEmail,
-          google_id: googleId,
-          status: 'waitlist',
-        });
-        userStatus = 'waitlist';
+        await supabase
+          .from('users')
+          .upsert({ id: uid, email, google_id: googleId, status: 'waitlist' }, { onConflict: 'id' });
+        await supabase
+          .from('waitlist')
+          .upsert({ email, source: 'landing' }, { onConflict: 'email', ignoreDuplicates: true });
+        status = 'waitlist';
       } else {
-        // Valid invite — create user with beta status and seed subscription
+        // Valid invite → beta access
         const isLifetimeFree = invite.plan_grant === 'beta_free';
-
-        await supabase.from('users').insert({
-          id: supabaseUserId,
-          email: userEmail,
-          google_id: googleId,
-          status: 'beta',
-          is_lifetime_free: isLifetimeFree,
-        });
+        await supabase
+          .from('users')
+          .upsert(
+            { id: uid, email, google_id: googleId, status: 'beta', is_lifetime_free: isLifetimeFree },
+            { onConflict: 'id' },
+          );
 
         // Seed subscription based on plan_grant
         const now = dayjs();
@@ -107,11 +81,9 @@ export async function GET(request: NextRequest) {
           founding: 'founding_monthly',
           standard: 'pro_monthly',
         };
-        const plan = planMap[invite.plan_grant] ?? 'pro_monthly';
-
         await supabase.from('subscriptions').insert({
-          user_id: supabaseUserId,
-          plan,
+          user_id: uid,
+          plan: planMap[invite.plan_grant] ?? 'pro_monthly',
           status: 'active',
           current_period_start: now.toISOString(),
           current_period_end: now.add(30, 'day').toISOString(),
@@ -119,35 +91,22 @@ export async function GET(request: NextRequest) {
 
         // Mark invite as used
         await supabase.from('invites').update({ used_at: now.toISOString() }).eq('id', invite.id);
-
-        userStatus = 'beta';
+        status = 'beta';
       }
     } else {
       // Returning user — update last_seen_at
-      await supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', supabaseUserId);
+      await supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', uid);
     }
 
-    // Route based on status
-    let destination: string;
-    if (userStatus === 'waitlist') {
-      destination = `${origin}/waitlist`;
-    } else {
-      destination = `${origin}/log`;
-    }
-
+    const destination = status === 'waitlist' ? `${origin}/waitlist` : `${origin}/log`;
     const response = NextResponse.redirect(destination);
 
-    // Clear the PKCE verifier cookie
-    response.cookies.delete('pkce_verifier');
-
-    // Pass the Google refresh_token to the client via a one-time cookie.
-    // The (app) layout reads this, saves it to SQLite, then deletes the cookie.
     if (tokens.refresh_token) {
       response.cookies.set('g_rt_once', tokens.refresh_token, {
-        httpOnly: true,
+        // httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        maxAge: 60, // 60 seconds — read once then gone
+        maxAge: 60,
         path: '/',
       });
     }
@@ -155,6 +114,6 @@ export async function GET(request: NextRequest) {
     return response;
   } catch (err) {
     console.error('[auth/callback] Unexpected error:', err);
-    return NextResponse.redirect(`${origin}/?error=unexpected`);
+    return NextResponse.redirect(`${origin}/login?error=unexpected`);
   }
 }
