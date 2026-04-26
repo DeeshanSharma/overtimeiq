@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   work_end            TEXT    NOT NULL DEFAULT '18:00',
   color               TEXT    NOT NULL DEFAULT '#3B8BD4',
   is_default          INTEGER NOT NULL DEFAULT 0,
-  created_at          TEXT    NOT NULL
+  created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Overtime session logs
@@ -102,11 +102,12 @@ VALUES (1, '₹', 15.0);
 
 // ─── Default job seed ─────────────────────────────────────────────────────────
 
-export function buildDefaultJobSQL(now: string): string {
+export function buildDefaultJobSQL(): string {
   return `
-INSERT OR IGNORE INTO jobs (name, hourly_rate, weekend_multiplier, holiday_multiplier,
-  work_start, work_end, color, is_default, created_at)
-VALUES ('My Job', 500, 1.5, 2.0, '09:00', '18:00', '#3B8BD4', 1, '${now}');
+INSERT INTO jobs (name, hourly_rate, weekend_multiplier, holiday_multiplier,
+  work_start, work_end, color, is_default)
+SELECT 'My Job', 500, 1.5, 2.0, '09:00', '18:00', '#3B8BD4', 1
+WHERE NOT EXISTS (SELECT 1 FROM jobs LIMIT 1);
 
 UPDATE settings SET default_job_id = (SELECT id FROM jobs WHERE is_default = 1 LIMIT 1)
 WHERE id = 1 AND default_job_id IS NULL;

@@ -56,7 +56,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && (pathname === '/' || pathname === '/login')) {
+  if (user && (pathname === '/' || pathname === '/login') && !pathname.startsWith('/admin')) {
     // Already logged in — send to the app
     const url = request.nextUrl.clone();
     url.pathname = '/dashboard';

@@ -159,8 +159,7 @@ export const useDBStore = create<DBState>((set, get) => ({
       // Seed defaults if first-time
       db.run(SEED_SETTINGS_SQL);
 
-      const now = new Date().toISOString();
-      db.run(buildDefaultJobSQL(now));
+      db.run(buildDefaultJobSQL());
 
       // Seed current year holidays
       const year = new Date().getFullYear();

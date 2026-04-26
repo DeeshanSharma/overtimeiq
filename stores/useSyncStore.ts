@@ -10,7 +10,7 @@
 "use client";
 
 import { create } from "zustand";
-import { refreshAccessToken } from "@/lib/auth";
+// Token refresh is server-side via /api/google-token (GOOGLE_CLIENT_SECRET not available in browser)
 import { useDBStore } from "./useDBStore";
 
 const DRIVE_API = "https://www.googleapis.com/drive";
@@ -63,12 +63,24 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return false;
     }
     try {
-      const newAccessToken = await refreshAccessToken(rt);
-      set({ accessToken: newAccessToken });
+      // Server-side route — client_secret lives on the server, not in the browser bundle
+      const res = await fetch('/api/google-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        console.warn('[useSyncStore] Server token refresh failed:', err);
+        return false;
+      }
+      const data = await res.json();
+      set({ accessToken: data.access_token });
       scheduleRefresh();
       return true;
     } catch (err) {
-      console.warn('[useSyncStore] Token refresh failed — Drive calls will fail:', err);
+      console.warn('[useSyncStore] Token refresh failed:', err);
       return false;
     }
   },
@@ -82,7 +94,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     if (!token) {
       // Try to get a fresh access token using the refresh token we just received
       try {
-        token = await refreshAccessToken(googleRefreshToken);
+        // Use the server route for the initial token fetch too
+      const initRes = await fetch('/api/google-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ refresh_token: googleRefreshToken }),
+      });
+      if (!initRes.ok) throw new Error('Initial token fetch failed');
+      const initData = await initRes.json();
+      token = initData.access_token;
         set({ accessToken: token });
         scheduleRefresh();
       } catch (err) {
@@ -94,11 +115,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     const { saveDB, runQuery, execSQL } = useDBStore.getState();
 
+    // token is guaranteed non-null here — the if(!token) block above either
+    // populated it or returned early
+    const safeToken = token as string;
+
     try {
       // Search Drive for existing DB file
       const searchRes = await driveGet(
         `${DRIVE_API}/v3/files?q=name%3D'${DB_FILENAME}'%20and%20trashed%3Dfalse&fields=files(id,modifiedTime)`,
-        token
+        safeToken
       );
 
       const files = (searchRes.files ?? []) as { id: string; modifiedTime: string }[];
@@ -107,7 +132,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         // First time — upload current DB
         const buf = saveDB();
         if (buf) {
-          const fileId = await uploadNewFile(buf, token);
+          const fileId = await uploadNewFile(buf, safeToken);
           set({ driveFileId: fileId });
           execSQL("UPDATE settings SET drive_file_id = ? WHERE id = 1", [fileId]);
           console.log("[useSyncStore] Created new Drive file:", fileId);
@@ -128,12 +153,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           // Same-device, no action needed
         } else if (driveMs > localMs) {
           // Drive is newer — download
-          await downloadFromDrive(driveFile.id, token);
+          await downloadFromDrive(driveFile.id, safeToken);
           console.log("[useSyncStore] Downloaded newer version from Drive");
         } else {
           // Local is newer — upload
           const buf = saveDB();
-          if (buf) await uploadUpdate(driveFile.id, buf, token);
+          if (buf) await uploadUpdate(driveFile.id, buf, safeToken);
           console.log("[useSyncStore] Uploaded newer local version to Drive");
         }
       }
