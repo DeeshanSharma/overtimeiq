@@ -91,16 +91,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   saveProToken: (token) => {
-    const { execSQL } = useDBStore.getState();
-    execSQL("UPDATE settings SET pro_token = ? WHERE id = 1", [token]);
+    const { runSilent } = useDBStore.getState();
+    runSilent("UPDATE settings SET pro_token = ? WHERE id = 1", [token]);
     set((s) => ({
       settings: s.settings ? { ...s.settings, pro_token: token } : s.settings,
     }));
   },
 
   saveGoogleRefreshToken: (token) => {
-    const { execSQL } = useDBStore.getState();
-    execSQL("UPDATE settings SET google_refresh_token = ? WHERE id = 1", [token]);
+    const { runSilent } = useDBStore.getState();
+    runSilent("UPDATE settings SET google_refresh_token = ? WHERE id = 1", [token]);
     set((s) => ({
       settings: s.settings ? { ...s.settings, google_refresh_token: token } : s.settings,
     }));

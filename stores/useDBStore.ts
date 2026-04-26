@@ -1,29 +1,24 @@
 /**
  * stores/useDBStore.ts
  *
- * Central sql.js database store.
- * Manages the SQLite instance, exposes query helpers, and handles
- * localStorage persistence + Drive upload triggering.
+ * Two write methods:
+ *  - execSQL   → writes SQLite + localStorage + arms Drive debounce (user data)
+ *  - runSilent → writes SQLite + localStorage only, NO debounce (sync metadata)
  *
- * All DB access in the app goes through this store's methods —
- * never import sql.js directly in components.
+ * All writes inside useSyncStore must use runSilent to avoid the recursive
+ * PATCH loop: execSQL → debounce → uploadToDrive → execSQL → ...
  */
 
-"use client";
+'use client';
 
-import { create } from "zustand";
-import {
-  SCHEMA_SQL,
-  SEED_SETTINGS_SQL,
-  buildDefaultJobSQL,
-  buildHolidaySeedSQL,
-} from "@/lib/db";
+import { SCHEMA_SQL, SEED_SETTINGS_SQL, buildDefaultJobSQL, buildHolidaySeedSQL } from '@/lib/db';
+import { create } from 'zustand';
 
-const DB_STORAGE_KEY = "otiq_db";
+const DB_STORAGE_KEY = 'otiq_db';
 const SCHEMA_VERSION = 1;
 
 // Dynamically imported to avoid SSR issues with WASM
-type SqlJs = typeof import("sql.js");
+type SqlJs = typeof import('sql.js');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Database = any;
 
@@ -40,11 +35,13 @@ interface DBState {
   // Core query methods
   runQuery: (sql: string, params?: (string | number | null)[]) => Row[];
   execSQL: (sql: string, params?: (string | number | null)[]) => void;
+  runSilent: (sql: string, params?: (string | number | null)[]) => void;
   getOne: (sql: string, params?: (string | number | null)[]) => Row | null;
   saveDB: () => Uint8Array | null;
 
   // Lifecycle
   initDB: () => Promise<void>;
+
   _driveDebounceTrigger: (() => void) | null;
   setDriveDebounceTrigger: (fn: () => void) => void;
 }
@@ -74,11 +71,12 @@ export const useDBStore = create<DBState>((set, get) => ({
       stmt.free();
       return rows;
     } catch (err) {
-      console.error("[useDBStore] runQuery error:", err, sql);
+      console.error('[useDBStore] runQuery error:', err, sql);
       return [];
     }
   },
 
+  // User-data writes — arms the Drive debounce
   execSQL: (sql, params = []) => {
     const { db, saveDB, _driveDebounceTrigger } = get();
     if (!db) return;
@@ -92,7 +90,22 @@ export const useDBStore = create<DBState>((set, get) => ({
         _driveDebounceTrigger?.();
       }, 10_000);
     } catch (err) {
-      console.error("[useDBStore] execSQL error:", err, sql);
+      console.error('[useDBStore] execSQL error:', err, sql);
+      throw err;
+    }
+  },
+
+  // Sync-metadata writes — NO debounce trigger
+  // Use this inside useSyncStore for last_synced_at, drive_file_id,
+  // google_refresh_token, pro_token — anything the sync process itself writes.
+  runSilent: (sql, params = []) => {
+    const { db, saveDB } = get();
+    if (!db) return;
+    try {
+      db.run(sql, params);
+      saveDB();
+    } catch (err) {
+      console.error('[useDBStore] runSilent error:', err, sql);
       throw err;
     }
   },
@@ -108,12 +121,10 @@ export const useDBStore = create<DBState>((set, get) => ({
     try {
       const data = db.export();
       const buffer = new Uint8Array(data);
-      // Write to localStorage
-      const serialised = JSON.stringify(Array.from(buffer));
-      localStorage.setItem(DB_STORAGE_KEY, serialised);
+      localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(Array.from(buffer)));
       return buffer;
     } catch (err) {
-      console.error("[useDBStore] saveDB error:", err);
+      console.error('[useDBStore] saveDB error:', err);
       return null;
     }
   },
@@ -124,7 +135,7 @@ export const useDBStore = create<DBState>((set, get) => ({
 
     try {
       // Dynamic import to avoid SSR — WASM only works in the browser
-      const initSqlJs = (await import("sql.js")).default;
+      const initSqlJs = (await import('sql.js')).default;
       const SQL = await initSqlJs({
         // sql.js WASM file — served from node_modules via Next.js public
         locateFile: (file: string) => `/sql-wasm/${file}`,
@@ -145,23 +156,17 @@ export const useDBStore = create<DBState>((set, get) => ({
       db.run(SCHEMA_SQL);
 
       // Check and update schema version
-      const versionRow = db.exec(
-        "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
-      );
+      const versionRow = db.exec('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1');
       const currentVersion = versionRow[0]?.values[0]?.[0] as number | undefined;
 
       if (!currentVersion || currentVersion < SCHEMA_VERSION) {
-        db.run(
-          `INSERT OR REPLACE INTO schema_version (version) VALUES (${SCHEMA_VERSION})`
-        );
+        db.run(`INSERT OR REPLACE INTO schema_version (version) VALUES (${SCHEMA_VERSION})`);
       }
 
       // Seed defaults if first-time
       db.run(SEED_SETTINGS_SQL);
-
       db.run(buildDefaultJobSQL());
 
-      // Seed current year holidays
       const year = new Date().getFullYear();
       const holidaySql = buildHolidaySeedSQL(year);
       if (holidaySql) db.run(holidaySql);
@@ -172,15 +177,13 @@ export const useDBStore = create<DBState>((set, get) => ({
       if (navigator.storage?.persist) {
         const persisted = await navigator.storage.persist();
         if (!persisted) {
-          console.warn(
-            "[useDBStore] Durable storage denied — data may be cleared by browser"
-          );
+          console.warn('[useDBStore] Durable storage denied — data may be cleared by browser');
           // useUIStore will pick this up and show the warning banner
         }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error("[useDBStore] initDB failed:", err);
+      console.error('[useDBStore] initDB failed:', err);
       set({ error: msg, isLoading: false });
     }
   },

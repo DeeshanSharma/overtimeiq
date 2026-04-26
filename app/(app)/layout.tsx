@@ -16,10 +16,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const bootstrapped = useRef(false);
 
-  const { initDB, isReady, error: dbError } = useDBStore();
-  const { syncOnLogin, setAccessToken } = useSyncStore();
+  const { initDB, isReady } = useDBStore();
+  const { syncOnLogin } = useSyncStore();
   const { initPro } = useProStore();
-  const { loadAll, settings, saveProToken, saveGoogleRefreshToken } = useSettingsStore();
+  const { loadAll, saveProToken, saveGoogleRefreshToken } = useSettingsStore();
   const { loadSession } = useSessionStore();
   const { addToast, setStorageDurabilityWarning } = useUIStore();
 
@@ -27,6 +27,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
     bootstrap();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function bootstrap() {
@@ -35,11 +36,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // 1. Verify Supabase session
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
-      router.replace("/");
+      router.replace("/login");
       return;
     }
 
-    // 2. Check user status
+    // 2. Check user access status
     const { data: userData } = await supabase
       .from("users")
       .select("status")
@@ -54,41 +55,70 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // 3. Initialise SQLite DB
     await initDB();
 
-    if (dbError) {
+    // Re-read after async initDB
+    if (useDBStore.getState().error) {
       addToast({ type: "error", message: "Failed to initialise database. Please refresh." });
       return;
     }
 
-    // 4. Load settings into store
+    // 4. Load settings + jobs + holidays into store
     loadAll();
 
-    // 5. Read and consume the one-time Google refresh token cookie (set by auth/callback)
-    //    Save it to SQLite settings — it lives there permanently, never on the server.
-    const grtCookie = document.cookie.split(";").find(c => c.trim().startsWith("g_rt_once="));
-    if (grtCookie) {
-      const refreshToken = grtCookie.split("=").slice(1).join("=").trim();
-      if (refreshToken) {
-        saveGoogleRefreshToken(refreshToken);
-        // Expire the cookie immediately
-        document.cookie = "g_rt_once=; path=/; max-age=0";
+    // 5. Handle Google refresh token
+    //
+    //    First login: the auth callback sets a one-time cookie g_rt_once.
+    //    Read it, save to SQLite (using runSilent so it doesn't arm debounce),
+    //    then pass directly to syncOnLogin.
+    //
+    //    Returning user: read the refresh token saved in SQLite from last login
+    //    and call syncOnLogin the same way.
+    //
+    //    In both cases syncOnLogin gets a fresh access token server-side, then
+    //    does the Drive compare-and-sync.
 
-        // Get a fresh access token and start Drive sync
-        const { refreshToken: refreshFn } = useSyncStore.getState();
-        const refreshed = await refreshFn();
-        if (refreshed) {
-          const { accessToken } = useSyncStore.getState();
-          if (accessToken) {
-            await syncOnLogin(refreshToken);
-          }
-        }
+    let googleRefreshToken: string | null = null;
+
+    // Check for first-login cookie
+    const grtCookie = document.cookie
+      .split(";")
+      .find(c => c.trim().startsWith("g_rt_once="));
+
+    if (grtCookie) {
+      const rt = grtCookie.split("=").slice(1).join("=").trim();
+      if (rt) {
+        googleRefreshToken = rt;
+        // Save to SQLite silently — doesn't trigger debounce
+        saveGoogleRefreshToken(rt);
+        // Expire the one-time cookie immediately
+        document.cookie = "g_rt_once=; path=/; max-age=0";
       }
-    } else if (useSettingsStore.getState().settings?.google_refresh_token) {
-      // Returning user — refresh the access token silently
-      const { refreshToken: refreshFn } = useSyncStore.getState();
-      await refreshFn();
     }
 
-    // 6. Verify pro token (online + cache)
+    // Fall back to whatever is already in SQLite for returning users
+    if (!googleRefreshToken) {
+      const row = useDBStore.getState().getOne(
+        "SELECT google_refresh_token FROM settings WHERE id = 1"
+      );
+      googleRefreshToken = (row?.google_refresh_token as string) ?? null;
+    }
+
+    // 6. Drive sync — always runs if we have a refresh token
+    if (googleRefreshToken) {
+      // Fire and forget — don't block the rest of bootstrap on sync
+      syncOnLogin(googleRefreshToken).catch(err =>
+        console.error("[AppLayout] syncOnLogin error:", err)
+      );
+    } else {
+      console.warn("[AppLayout] No google_refresh_token — Drive sync skipped");
+    }
+
+    // 7. Wire the debounce trigger: every execSQL write → syncNow after 10s
+    //    Must be set AFTER bootstrap so the debounce doesn't fire during init
+    useDBStore.getState().setDriveDebounceTrigger(() => {
+      useSyncStore.getState().syncNow();
+    });
+
+    // 8. Pro token — verify cached + fetch fresh if needed
     const cachedToken = useSettingsStore.getState().settings?.pro_token ?? null;
     await initPro(user.id, cachedToken);
 
@@ -98,27 +128,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       saveProToken(freshToken);
     }
 
-    // 7. Check storage durability
+    // 9. Storage durability check
     if (navigator.storage?.persisted) {
       const persisted = await navigator.storage.persisted();
       if (!persisted) setStorageDurabilityWarning(true);
     }
 
-    // 8. Recover any active punch-in session
+    // 10. Recover any interrupted punch-in session
     loadSession();
-
-    // 9. Wire DB save → Drive debounce trigger
-    useDBStore.getState().setDriveDebounceTrigger(() => {
-      useSyncStore.getState().syncNow();
-    });
   }
 
-  if (!isReady) {
-    return <AppSkeleton />;
-  }
+  if (!isReady) return <AppSkeleton />;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f5f0e8", fontFamily: "var(--font-mono)", display: "flex", flexDirection: "column" }}>
+    <div style={{
+      minHeight: "100vh",
+      background: "#f5f0e8",
+      fontFamily: "var(--font-mono)",
+      display: "flex",
+      flexDirection: "column",
+    }}>
       <StorageDurabilityBanner />
       <TopBar />
       <main style={{ flex: 1, overflow: "auto" }}>
@@ -131,9 +160,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
 function AppSkeleton() {
   return (
-    <div style={{ minHeight: "100vh", background: "#f5f0e8", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-mono)" }}>
+    <div style={{
+      minHeight: "100vh",
+      background: "#f5f0e8",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontFamily: "var(--font-mono)",
+    }}>
       <div style={{ textAlign: "center" }}>
-        <div style={{ width: "32px", height: "32px", border: "2px solid #d1c9b8", borderTopColor: "#0e0e0e", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
+        <div style={{
+          width: "32px", height: "32px",
+          border: "2px solid #d1c9b8", borderTopColor: "#0e0e0e",
+          borderRadius: "50%",
+          animation: "spin 0.8s linear infinite",
+          margin: "0 auto 16px",
+        }} />
         <p style={{ fontSize: "0.78rem", color: "#6b6b5e" }}>Loading database…</p>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
@@ -145,9 +187,20 @@ function StorageDurabilityBanner() {
   const { storageDurabilityWarning } = useUIStore();
   if (!storageDurabilityWarning) return null;
   return (
-    <div style={{ padding: "10px 20px", background: "#fef3c7", borderBottom: "1px solid #d97706", fontSize: "0.75rem", color: "#92400e", display: "flex", alignItems: "center", gap: "8px" }}>
+    <div style={{
+      padding: "10px 20px",
+      background: "#fef3c7",
+      borderBottom: "1px solid #d97706",
+      fontSize: "0.75rem",
+      color: "#92400e",
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+    }}>
       <span>⚠</span>
-      <span>Your local data may be cleared by the browser. Ensure Drive sync is active to keep your data safe.</span>
+      <span>
+        Your local data may be cleared by the browser. Drive sync is your backup — keep it active.
+      </span>
     </div>
   );
 }

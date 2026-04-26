@@ -12,9 +12,8 @@
  *  4. Redirects to /auth/callback?code=...&verifier=... for server-side exchange
  */
 
-import { useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Suspense } from 'react';
+import { Suspense, useEffect } from 'react';
 
 function ProcessingInner() {
   const searchParams = useSearchParams();
