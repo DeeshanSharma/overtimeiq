@@ -1,11 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { generateVerifier, generateChallenge, buildAuthURL } from "@/lib/auth";
+import { captureReferral, getReferralSource, clearReferral } from "@/lib/referral";
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Capture ?ref param in case user lands directly on /login with a ref
+  useEffect(() => {
+    captureReferral();
+
+    // Show any error passed back from the auth callback
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get("error");
+    if (err) setError(decodeURIComponent(err).replace(/_/g, " "));
+  }, []);
 
   async function handleSignIn() {
     setLoading(true);
@@ -13,8 +24,17 @@ export default function LoginPage() {
     try {
       const verifier = generateVerifier();
       const challenge = await generateChallenge(verifier);
-      const authUrl = buildAuthURL({ challenge });
+
+      // Store the referral source in sessionStorage so the auth callback
+      // can include it when creating the user / waitlist record
+      const source = getReferralSource();
       sessionStorage.setItem("pkce_verifier", verifier);
+      sessionStorage.setItem("ref_source", source);
+
+      // Clear from localStorage — the source is now handed off to the auth flow
+      clearReferral();
+
+      const authUrl = buildAuthURL({ challenge });
       window.location.href = authUrl;
     } catch {
       setError("Failed to start sign-in. Please try again.");
@@ -35,7 +55,6 @@ export default function LoginPage() {
     }}>
       <div style={{ maxWidth: "400px", width: "100%" }}>
 
-        {/* Wordmark */}
         <p style={{ fontFamily: "var(--font-serif)", fontSize: "1.4rem", color: "#0e0e0e", marginBottom: "48px", letterSpacing: "-0.02em" }}>
           OvertimeIQ
         </p>
@@ -50,7 +69,7 @@ export default function LoginPage() {
 
         {error && (
           <div style={{ padding: "12px 16px", background: "#fef2f2", border: "1px solid #dc2626", marginBottom: "20px" }}>
-            <p style={{ fontSize: "0.78rem", color: "#dc2626", margin: 0 }}>{error}</p>
+            <p style={{ fontSize: "0.78rem", color: "#dc2626", margin: 0, textTransform: "capitalize" }}>{error}</p>
           </div>
         )}
 
@@ -71,12 +90,11 @@ export default function LoginPage() {
             alignItems: "center",
             justifyContent: "center",
             gap: "12px",
-            transition: "background 0.15s",
           }}
         >
           {loading ? (
             <>
-              <span style={{ width: "14px", height: "14px", border: "2px solid #f5f0e8", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
+              <Spinner />
               Redirecting to Google…
             </>
           ) : (
@@ -96,6 +114,17 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function Spinner() {
+  return (
+    <span style={{
+      width: "14px", height: "14px",
+      border: "2px solid #f5f0e8", borderTopColor: "transparent",
+      borderRadius: "50%", display: "inline-block",
+      animation: "spin 0.7s linear infinite",
+    }} />
   );
 }
 

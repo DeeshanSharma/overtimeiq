@@ -45,8 +45,14 @@ create table if not exists public.waitlist (
   id            uuid        primary key default gen_random_uuid(),
   email         text        not null unique,
   name          text        default null,
+  -- Source tracks where the user came from.
+  -- "landing"     = direct visit, no ref param
+  -- "linkedin"    = ?ref=linkedin
+  -- "devto"       = ?ref=devto or ?ref=dev.to
+  -- "producthunt" = ?ref=producthunt or ?ref=ph
+  -- "referral"    = personal referral link or unknown ?ref value
   source        text        not null default 'landing'
-                            check (source in ('landing', 'producthunt', 'referral', 'linkedin')),
+                check (source in ('landing', 'linkedin', 'devto', 'producthunt', 'referral')),
   referral_code text        default null,
   converted_at  timestamptz default null,
   created_at    timestamptz not null default now()
@@ -112,7 +118,7 @@ create index if not exists idx_subscriptions_status  on public.subscriptions(sta
 
 
 -- ============================================================
--- HELPER: updated_at auto-stamp
+-- AUTO-UPDATED updated_at
 -- ============================================================
 
 create or replace function public.handle_updated_at()
@@ -133,3 +139,7 @@ create trigger subscriptions_updated_at
 -- (Stored in SQLite on Drive — not here. This is just a reference comment.)
 -- See lib/db.ts for the holiday seed data that goes into SQLite.
 -- ============================================================
+
+-- MIGRATION: run these if you already have the table from v1
+-- alter table public.waitlist drop constraint if exists waitlist_source_check;
+-- alter table public.waitlist add constraint waitlist_source_check check (source in ('landing', 'linkedin', 'devto', 'producthunt', 'referral'));

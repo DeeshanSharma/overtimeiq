@@ -15,10 +15,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 export async function getAdminEmails(): Promise<Set<string>> {
   const raw = process.env.ADMIN_EMAILS ?? "";
   return new Set(
-    raw
-      .split(",")
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean)
+    raw.split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
   );
 }
 
@@ -28,20 +25,15 @@ export async function requireAdmin(): Promise<{
   userId: string | null;
 }> {
   const supabase = await getSupabaseServerClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
+  const { data: { user }, error } = await supabase.auth.getUser();
 
   if (error || !user || !user.email) {
     return { ok: false, email: null, userId: null };
   }
 
   const admins = await getAdminEmails();
-  const isAdmin = admins.has(user.email.toLowerCase());
-
   return {
-    ok: isAdmin,
+    ok: admins.has(user.email.toLowerCase()),
     email: user.email,
     userId: user.id,
   };

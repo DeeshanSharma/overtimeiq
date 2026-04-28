@@ -26,24 +26,26 @@ function ProcessingInner() {
       window.location.href = `/login?error=${encodeURIComponent(error)}`;
       return;
     }
-
     if (!code) {
       window.location.href = '/login?error=missing_code';
       return;
     }
 
     const verifier = sessionStorage.getItem('pkce_verifier');
-
     if (!verifier) {
       window.location.href = '/login?error=missing_verifier';
       return;
     }
 
-    // One-time use — clear immediately
-    sessionStorage.removeItem('pkce_verifier');
+    // Read referral source that was stored before the Google redirect
+    const refSource = sessionStorage.getItem('ref_source') ?? 'landing';
 
-    // Send code + verifier to the server route handler
-    const params = new URLSearchParams({ code, verifier });
+    // Clear both — one-time use
+    sessionStorage.removeItem('pkce_verifier');
+    sessionStorage.removeItem('ref_source');
+
+    // Send code + verifier + source to the server route
+    const params = new URLSearchParams({ code, verifier, ref_source: refSource });
     window.location.href = `/auth/callback?${params.toString()}`;
   }, [searchParams]);
 

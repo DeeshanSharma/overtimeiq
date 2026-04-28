@@ -47,9 +47,6 @@ export async function POST(request: NextRequest) {
   }
 
   const db = service();
-  const token = randomBytes(16).toString('hex');
-  const expiresAt = dayjs().add(expiresInDays, 'day').toISOString();
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
 
   // Check if there's already an unused, non-expired invite for this email
   const { data: existing } = await db
@@ -61,6 +58,8 @@ export async function POST(request: NextRequest) {
     .limit(1)
     .single();
 
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
+
   if (existing) {
     // Return the existing invite link instead of creating a duplicate
     return NextResponse.json({
@@ -69,6 +68,9 @@ export async function POST(request: NextRequest) {
       existing: true,
     });
   }
+
+  const token = randomBytes(16).toString('hex');
+  const expiresAt = dayjs().add(expiresInDays, 'day').toISOString();
 
   const { data, error } = await db
     .from('invites')
@@ -84,7 +86,7 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Mark waitlist entry as converted if it exists
+  // Mark waitlist entry as converted
   await db.from('waitlist').update({ converted_at: new Date().toISOString() }).eq('email', email);
 
   return NextResponse.json({
@@ -103,7 +105,7 @@ export async function DELETE(request: NextRequest) {
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
   const db = service();
-  // Expire it immediately rather than deleting — preserves the audit trail
+  // Expire immediately rather than delete — preserves audit trail
   await db.from('invites').update({ expires_at: new Date().toISOString() }).eq('id', id).is('used_at', null);
 
   return NextResponse.json({ ok: true });

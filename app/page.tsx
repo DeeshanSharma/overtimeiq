@@ -1,34 +1,59 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { captureReferral, getReferralSource, getReferralCode, clearReferral } from "@/lib/referral";
+
+// ─── Waitlist Form ─────────────────────────────────────────────────────────────
 
 function WaitlistForm() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle"|"loading"|"success"|"exists"|"error">("idle");
+  const [status, setStatus] = useState<"idle" | "loading" | "success" | "exists" | "error">("idle");
 
   async function handleSubmit() {
     if (!email.includes("@")) return;
     setStatus("loading");
+
+    const source = getReferralSource();
+    const referralCode = getReferralCode();
+
     try {
       const res = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, source, referral_code: referralCode }),
       });
-      setStatus(res.ok ? "success" : res.status === 409 ? "exists" : "error");
-    } catch { setStatus("error"); }
+
+      if (res.ok) {
+        clearReferral(); // one-time use
+        setStatus("success");
+      } else if (res.status === 409) {
+        setStatus("exists");
+      } else {
+        setStatus("error");
+      }
+    } catch {
+      setStatus("error");
+    }
   }
 
-  if (status === "success") return (
-    <div style={{ border: "1px solid #d97706", padding: "18px 24px", background: "#fffbeb" }}>
-      <p style={{ fontFamily: "var(--font-serif)", color: "#78350f", margin: 0 }}>You&apos;re on the list.</p>
-      <p style={{ fontSize: "0.78rem", color: "#6b6b5e", margin: "4px 0 0" }}>We&apos;ll send an invite when your spot is ready.</p>
-    </div>
-  );
+  if (status === "success") {
+    return (
+      <div style={{ border: "1px solid #d97706", padding: "18px 24px", background: "#fffbeb" }}>
+        <p style={{ fontFamily: "var(--font-serif)", color: "#78350f", margin: 0 }}>You&apos;re on the list.</p>
+        <p style={{ fontSize: "0.78rem", color: "#6b6b5e", margin: "4px 0 0" }}>
+          We&apos;ll send an invite when your spot is ready.
+        </p>
+      </div>
+    );
+  }
 
-  if (status === "exists") return (
-    <p style={{ fontSize: "0.78rem", color: "#6b6b5e" }}>Already on the list — we&apos;ll be in touch.</p>
-  );
+  if (status === "exists") {
+    return (
+      <p style={{ fontSize: "0.78rem", color: "#6b6b5e" }}>
+        Already on the list — we&apos;ll be in touch.
+      </p>
+    );
+  }
 
   return (
     <div style={{ display: "flex", maxWidth: "480px" }}>
@@ -61,6 +86,8 @@ function WaitlistForm() {
   );
 }
 
+// ─── Features ──────────────────────────────────────────────────────────────────
+
 const FEATURES = [
   { label: "Runs in your browser", body: "SQLite via WebAssembly. No server receives your work data. Ever." },
   { label: "Your Drive, your file", body: "One overtimeiq.db on your Google Drive. You own it. We can't see it." },
@@ -76,7 +103,14 @@ const s = {
   amber: "#d97706",
 } as const;
 
+// ─── Page ──────────────────────────────────────────────────────────────────────
+
 export default function LandingPage() {
+  // Capture ?ref param on every load — stores to localStorage if not already set
+  useEffect(() => {
+    captureReferral();
+  }, []);
+
   return (
     <div style={{ minHeight: "100vh", fontFamily: "var(--font-mono)", background: "#f5f0e8", color: "#0e0e0e" }}>
 
@@ -128,7 +162,7 @@ export default function LandingPage() {
           </p>
           <div style={{ display: "flex", gap: "10px", marginTop: "20px", flexWrap: "wrap" }}>
             {["Next.js 16", "sql.js WASM", "Supabase", "Google Drive", "Zustand", "Recharts"].map(t => (
-              <span key={t} style={{ fontSize: "0.7rem", padding: "3px 9px", border: s.rule, ...s.muted, letterSpacing: "0.03em" }}>{t}</span>
+              <span key={t} style={{ fontSize: "0.7rem", padding: "3px 9px", border: s.rule, ...s.muted }}>{t}</span>
             ))}
           </div>
         </div>
@@ -156,12 +190,21 @@ export default function LandingPage() {
         <p style={{ fontSize: "0.68rem", letterSpacing: "0.1em", ...s.muted, textTransform: "uppercase", marginBottom: "40px" }}>Pricing</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "1px", background: "#d1c9b8" }}>
           {[
-            { plan: "Personal", price: "₹0", period: "forever", note: "No credit card.", highlight: false,
-              features: ["Unlimited log entries","Google Drive sync","3 months visibility","1 job profile","Offline support"], cta: "Request access" },
-            { plan: "Pro", price: "₹149", period: "/ month", note: "₹999/year — save 44%", highlight: false,
-              features: ["Full history","5 job profiles","Excel import & export","PDF reports","Project tagging"], cta: "Request access" },
-            { plan: "Founding", price: "₹99", period: "/ month", note: "Locked for life · 30-day window", highlight: true,
-              features: ["Everything in Pro","Price never increases","First to new features","Direct line to the builder"], cta: "Claim founding rate" },
+            {
+              plan: "Personal", price: "₹0", period: "forever", note: "No credit card.", highlight: false,
+              features: ["Unlimited log entries", "Google Drive sync", "3 months visibility", "1 job profile", "Offline support"],
+              cta: "Request access",
+            },
+            {
+              plan: "Pro", price: "₹149", period: "/ month", note: "₹999/year — save 44%", highlight: false,
+              features: ["Full history", "5 job profiles", "Excel import & export", "PDF reports", "Project tagging"],
+              cta: "Request access",
+            },
+            {
+              plan: "Founding", price: "₹99", period: "/ month", note: "Locked for life · 30-day window", highlight: true,
+              features: ["Everything in Pro", "Price never increases", "First to new features", "Direct line to the builder"],
+              cta: "Claim founding rate",
+            },
           ].map(tier => (
             <div key={tier.plan} style={{ padding: "36px 28px", background: tier.highlight ? "#0e0e0e" : "#f5f0e8", color: tier.highlight ? "#f5f0e8" : "#0e0e0e" }}>
               <p style={{ fontSize: "0.68rem", letterSpacing: "0.1em", textTransform: "uppercase", opacity: 0.5, marginBottom: "10px" }}>{tier.plan}</p>

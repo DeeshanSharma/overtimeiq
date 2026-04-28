@@ -10,16 +10,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse, type NextRequest } from 'next/server';
 
-// Use service role to bypass RLS for inserts
 function getServiceClient() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!);
 }
+
+const VALID_SOURCES = new Set(['landing', 'linkedin', 'devto', 'producthunt', 'referral']);
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
   const email = body?.email?.trim()?.toLowerCase();
   const name = body?.name?.trim() ?? null;
-  const source = body?.source ?? 'landing';
+  const rawSource = body?.source ?? 'landing';
+  const source = VALID_SOURCES.has(rawSource) ? rawSource : 'landing';
+  const referralCode = body?.referral_code ?? null;
 
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: 'Invalid email' }, { status: 400 });
@@ -31,10 +34,10 @@ export async function POST(request: NextRequest) {
     email,
     name,
     source,
+    referral_code: referralCode,
   });
 
   if (error) {
-    // Unique constraint violation = already on waitlist
     if (error.code === '23505') {
       return NextResponse.json({ message: 'Already on waitlist' }, { status: 409 });
     }
@@ -42,5 +45,5 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 
-  return NextResponse.json({ message: 'Added to waitlist' }, { status: 200 });
+  return NextResponse.json({ message: 'Added to waitlist' });
 }

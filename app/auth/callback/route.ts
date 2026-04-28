@@ -3,11 +3,16 @@ import { getSupabaseServiceClient } from '@/lib/supabase/server';
 import dayjs from 'dayjs';
 import { NextResponse, type NextRequest } from 'next/server';
 
+const VALID_SOURCES = new Set(['landing', 'linkedin', 'devto', 'producthunt', 'referral']);
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
   const error = searchParams.get('error');
   const verifier = searchParams.get('verifier');
+  // Referral source passed through from the processing page
+  const rawSource = searchParams.get('ref_source') ?? 'landing';
+  const refSource = VALID_SOURCES.has(rawSource) ? rawSource : 'landing';
 
   if (error) {
     return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(error)}`);
@@ -15,7 +20,7 @@ export async function GET(request: NextRequest) {
   if (!code) {
     return NextResponse.redirect(`${origin}/login?error=missing_code`);
   }
-  // No verifier yet — redirect to processing page which reads it from sessionStorage
+  // No verifier yet — redirect to processing page to read it from sessionStorage
   if (!verifier) {
     return NextResponse.redirect(`${origin}/auth/processing?code=${code}`);
   }
@@ -56,16 +61,25 @@ export async function GET(request: NextRequest) {
         .maybeSingle();
 
       if (!invite) {
-        // No valid invite — create user with waitlist status
+        // No invite — add to waitlist with referral source
         await supabase
           .from('users')
           .upsert({ id: uid, email, google_id: googleId, status: 'waitlist' }, { onConflict: 'id' });
-        await supabase
-          .from('waitlist')
-          .upsert({ email, source: 'landing' }, { onConflict: 'email', ignoreDuplicates: true });
+        // Upsert into waitlist — if they already submitted the form, update source only if it was "landing"
+        const { data: existingWL } = await supabase.from('waitlist').select('id, source').eq('email', email).single();
+
+        if (existingWL) {
+          // Only upgrade the source if the existing one is generic "landing"
+          if (existingWL.source === 'landing' && refSource !== 'landing') {
+            await supabase.from('waitlist').update({ source: refSource }).eq('email', email);
+          }
+        } else {
+          await supabase.from('waitlist').insert({ email, source: refSource });
+        }
+
         status = 'waitlist';
       } else {
-        // Valid invite → beta access
+        // Valid invite — grant beta access
         const isLifetimeFree = invite.plan_grant === 'beta_free';
         await supabase
           .from('users')
@@ -91,6 +105,10 @@ export async function GET(request: NextRequest) {
 
         // Mark invite as used
         await supabase.from('invites').update({ used_at: now.toISOString() }).eq('id', invite.id);
+
+        // Mark waitlist as converted if they were on it
+        await supabase.from('waitlist').update({ converted_at: new Date().toISOString() }).eq('email', email);
+
         status = 'beta';
       }
     } else {
@@ -99,6 +117,7 @@ export async function GET(request: NextRequest) {
     }
 
     const destination = status === 'waitlist' ? `${origin}/waitlist` : `${origin}/log`;
+
     const response = NextResponse.redirect(destination);
 
     if (tokens.refresh_token) {
