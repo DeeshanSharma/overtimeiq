@@ -44,57 +44,71 @@ export async function GET(request: NextRequest) {
     const email = authData.user.email!;
     const googleId = (authData.user.user_metadata?.sub as string) ?? uid;
 
+    // ── Check existing user row ───────────────────────────────────────────
     const { data: existingUser } = await supabase.from('users').select('id, status').eq('id', uid).single();
 
     let status = existingUser?.status ?? null;
 
-    if (!existingUser) {
-      // Check for valid pending invite
-      const { data: invite } = await supabase
+    // ── Helper: look up ANY invite for this email (valid or expired) ──────
+    // Returns { valid, expired, invite } so we can branch cleanly.
+    async function findInvite(email: string) {
+      const now = new Date().toISOString();
+
+      // 1. Unused + not expired = valid
+      const { data: valid } = await supabase
         .from('invites')
-        .select('id, plan_grant')
+        .select('id, plan_grant, expires_at')
         .eq('email', email)
         .is('used_at', null)
-        .gt('expires_at', new Date().toISOString())
+        .gt('expires_at', now)
         .order('created_at', { ascending: false })
         .limit(1)
-        .maybeSingle();
+        .single();
 
-      if (!invite) {
-        // No invite — add to waitlist with referral source
-        await supabase
-          .from('users')
-          .upsert({ id: uid, email, google_id: googleId, status: 'waitlist' }, { onConflict: 'id' });
-        // Upsert into waitlist — if they already submitted the form, update source only if it was "landing"
-        const { data: existingWL } = await supabase.from('waitlist').select('id, source').eq('email', email).single();
+      if (valid) return { valid: true, expired: false, invite: valid };
 
-        if (existingWL) {
-          // Only upgrade the source if the existing one is generic "landing"
-          if (existingWL.source === 'landing' && refSource !== 'landing') {
-            await supabase.from('waitlist').update({ source: refSource }).eq('email', email);
-          }
-        } else {
-          await supabase.from('waitlist').insert({ email, source: refSource });
-        }
+      // 2. Unused + expired
+      const { data: expired } = await supabase
+        .from('invites')
+        .select('id, plan_grant, expires_at')
+        .eq('email', email)
+        .is('used_at', null)
+        .lte('expires_at', now)
+        .order('expires_at', { ascending: false })
+        .limit(1)
+        .single();
 
-        status = 'waitlist';
-      } else {
-        // Valid invite — grant beta access
-        const isLifetimeFree = invite.plan_grant === 'beta_free';
-        await supabase
-          .from('users')
-          .upsert(
-            { id: uid, email, google_id: googleId, status: 'beta', is_lifetime_free: isLifetimeFree },
-            { onConflict: 'id' },
-          );
+      if (expired) return { valid: false, expired: true, invite: expired };
 
-        // Seed subscription based on plan_grant
-        const now = dayjs();
-        const planMap: Record<string, string> = {
-          beta_free: 'beta_free',
-          founding: 'founding_monthly',
-          standard: 'pro_monthly',
-        };
+      return { valid: false, expired: false, invite: null };
+    }
+
+    // ── Helper: grant beta access from a valid invite ─────────────────────
+    async function grantAccess(invite: { id: string; plan_grant: string }) {
+      const isLifetimeFree = invite.plan_grant === 'beta_free';
+      await supabase
+        .from('users')
+        .upsert(
+          { id: uid, email, google_id: googleId, status: 'beta', is_lifetime_free: isLifetimeFree },
+          { onConflict: 'id' },
+        );
+
+      const now = dayjs();
+      const planMap: Record<string, string> = {
+        beta_free: 'beta_free',
+        founding: 'founding_monthly',
+        standard: 'pro_monthly',
+      };
+
+      // Insert subscription only if one doesn't already exist
+      const { data: existingSub } = await supabase
+        .from('subscriptions')
+        .select('id')
+        .eq('user_id', uid)
+        .limit(1)
+        .single();
+
+      if (!existingSub) {
         await supabase.from('subscriptions').insert({
           user_id: uid,
           plan: planMap[invite.plan_grant] ?? 'pro_monthly',
@@ -102,22 +116,73 @@ export async function GET(request: NextRequest) {
           current_period_start: now.toISOString(),
           current_period_end: now.add(30, 'day').toISOString(),
         });
+      }
 
-        // Mark invite as used
-        await supabase.from('invites').update({ used_at: now.toISOString() }).eq('id', invite.id);
+      // Mark invite as used
+      await supabase.from('invites').update({ used_at: now.toISOString() }).eq('id', invite.id);
 
-        // Mark waitlist as converted if they were on it
-        await supabase.from('waitlist').update({ converted_at: new Date().toISOString() }).eq('email', email);
+      // Mark waitlist as converted if they were on it
+      await supabase.from('waitlist').update({ converted_at: now.toISOString() }).eq('email', email);
+    }
 
+    // ── Helper: add user to waitlist ──────────────────────────────────────
+    async function addToWaitlist() {
+      await supabase
+        .from('users')
+        .upsert({ id: uid, email, google_id: googleId, status: 'waitlist' }, { onConflict: 'id' });
+
+      const { data: existingWL } = await supabase.from('waitlist').select('id, source').eq('email', email).single();
+
+      if (existingWL) {
+        if (existingWL.source === 'landing' && refSource !== 'landing') {
+          await supabase.from('waitlist').update({ source: refSource }).eq('email', email);
+        }
+      } else {
+        await supabase.from('waitlist').insert({ email, source: refSource });
+      }
+    }
+
+    // ── Main routing logic ────────────────────────────────────────────────
+
+    if (!existingUser) {
+      // Brand-new user — check their invite state
+      const { valid, expired, invite } = await findInvite(email);
+
+      if (valid && invite) {
+        await grantAccess(invite);
         status = 'beta';
+      } else if (expired && invite) {
+        // Expired invite — redirect to a clear error page
+        // Don't create a user row yet — they need a fresh invite first
+        return NextResponse.redirect(`${origin}/invite-expired?email=${encodeURIComponent(email)}`);
+      } else {
+        // No invite at all → waitlist
+        await addToWaitlist();
+        status = 'waitlist';
+      }
+    } else if (existingUser.status === 'waitlist') {
+      // Returning waitlisted user — check if they've been invited since last visit
+      const { valid, expired, invite } = await findInvite(email);
+
+      if (valid && invite) {
+        // They've been invited since they last visited — let them in
+        await grantAccess(invite);
+        status = 'beta';
+      } else if (expired && invite) {
+        // Had an invite but it expired before they used it
+        return NextResponse.redirect(`${origin}/invite-expired?email=${encodeURIComponent(email)}`);
+      } else {
+        // Still no invite — update last_seen and keep them on waitlist
+        await supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', uid);
+        status = 'waitlist';
       }
     } else {
-      // Returning user — update last_seen_at
+      // Active / beta user — just bump last_seen
       await supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', uid);
     }
 
+    // ── Final redirect ────────────────────────────────────────────────────
     const destination = status === 'waitlist' ? `${origin}/waitlist` : `${origin}/log`;
-
     const response = NextResponse.redirect(destination);
 
     if (tokens.refresh_token) {
