@@ -12,6 +12,7 @@ export async function GET(request: NextRequest) {
   const verifier = searchParams.get('verifier');
   // Referral source passed through from the processing page
   const rawSource = searchParams.get('ref_source') ?? 'landing';
+  const refCode = searchParams.get('ref_code') ?? null;
   const refSource = VALID_SOURCES.has(rawSource) ? rawSource : 'landing';
 
   if (error) {
@@ -135,10 +136,10 @@ export async function GET(request: NextRequest) {
 
       if (existingWL) {
         if (existingWL.source === 'landing' && refSource !== 'landing') {
-          await supabase.from('waitlist').update({ source: refSource }).eq('email', email);
+          await supabase.from('waitlist').update({ source: refSource, referral_code: refCode }).eq('email', email);
         }
       } else {
-        await supabase.from('waitlist').insert({ email, source: refSource });
+        await supabase.from('waitlist').insert({ email, source: refSource, referral_code: refCode });
       }
     }
 
@@ -182,7 +183,7 @@ export async function GET(request: NextRequest) {
     }
 
     // ── Final redirect ────────────────────────────────────────────────────
-    const destination = status === 'waitlist' ? `${origin}/waitlist` : `${origin}/log`;
+    const destination = status === 'waitlist' ? `${origin}/waitlist` : `${origin}/dashboard`;
     const response = NextResponse.redirect(destination);
 
     if (tokens.refresh_token) {

@@ -1,8 +1,8 @@
-"use client";
+'use client';
 
 import { useState, useEffect } from "react";
 import { generateVerifier, generateChallenge, buildAuthURL } from "@/lib/auth";
-import { captureReferral, getReferralSource, clearReferral } from "@/lib/referral";
+import { captureReferral, getReferralSource, clearReferral, getReferralCode } from "@/lib/referral";
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
@@ -25,11 +25,13 @@ export default function LoginPage() {
       const verifier = generateVerifier();
       const challenge = await generateChallenge(verifier);
 
-      // Store the referral source in sessionStorage so the auth callback
-      // can include it when creating the user / waitlist record
+      // Store the referral source & code if present in sessionStorage so the
+      // auth callback can include it when creating the user / waitlist record
       const source = getReferralSource();
-      sessionStorage.setItem("pkce_verifier", verifier);
-      sessionStorage.setItem("ref_source", source);
+      const refCode = getReferralCode();
+      sessionStorage.setItem('pkce_verifier', verifier);
+      sessionStorage.setItem('ref_source', source);
+      if (refCode) sessionStorage.setItem('ref_code', refCode);
 
       // Clear from localStorage — the source is now handed off to the auth flow
       clearReferral();
@@ -52,7 +54,7 @@ export default function LoginPage() {
       alignItems: "center",
       justifyContent: "center",
       padding: "24px",
-    }}>
+      }}>
       <div style={{ maxWidth: "400px", width: "100%" }}>
 
         <p style={{ fontFamily: "var(--font-serif)", fontSize: "1.4rem", color: "#0e0e0e", marginBottom: "48px", letterSpacing: "-0.02em" }}>

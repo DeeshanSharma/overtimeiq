@@ -39,13 +39,20 @@ function ProcessingInner() {
 
     // Read referral source that was stored before the Google redirect
     const refSource = sessionStorage.getItem('ref_source') ?? 'landing';
+    const refCode = sessionStorage.getItem('ref_code') ?? null;
 
     // Clear both — one-time use
     sessionStorage.removeItem('pkce_verifier');
     sessionStorage.removeItem('ref_source');
+    sessionStorage.removeItem('ref_code');
 
     // Send code + verifier + source to the server route
-    const params = new URLSearchParams({ code, verifier, ref_source: refSource });
+    const params = new URLSearchParams({
+      code,
+      verifier,
+      ref_source: refSource,
+      ...(refCode ? { ref_code: refCode } : {}),
+    });
     window.location.href = `/auth/callback?${params.toString()}`;
   }, [searchParams]);
 
