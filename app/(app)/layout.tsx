@@ -84,7 +84,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       .find(c => c.trim().startsWith("g_rt_once="));
 
     if (grtCookie) {
-      const rt = grtCookie.split("=").slice(1).join("=").trim();
+      const rt = decodeURIComponent(grtCookie.split('=').slice(1).join('=').trim());
       if (rt) {
         googleRefreshToken = rt;
         // Save to SQLite silently — doesn't trigger debounce
