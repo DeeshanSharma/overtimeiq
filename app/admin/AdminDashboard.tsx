@@ -52,6 +52,7 @@ const SOURCE_LABELS: Record<string, string> = {
   linkedin: "LinkedIn",
   devto: "dev.to",
   producthunt: "ProductHunt",
+  twitter: "Twitter",
   referral: "Referral",
   google_signin: "Google sign-in",
 };

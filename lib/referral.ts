@@ -36,8 +36,8 @@ const REF_MAP: Record<string, string> = {
   producthunt:  "producthunt",
   ph:           "producthunt",
   referral:     "referral",
-  twitter:      "referral",
-  x:            "referral",
+  twitter:      "twitter",
+  x:            "twitter",
 };
 
 /**
@@ -50,7 +50,7 @@ export function captureReferral(): void {
 
   const params = new URLSearchParams(window.location.search);
   const ref = params.get("ref");
-  const code = params.get("code");
+  const refCode = params.get("ref_code");
 
   if (ref) {
     const source = REF_MAP[ref.toLowerCase()] ?? "referral";
@@ -60,8 +60,8 @@ export function captureReferral(): void {
     }
   }
 
-  if (code && !localStorage.getItem(STORAGE_CODE_KEY)) {
-    localStorage.setItem(STORAGE_CODE_KEY, code);
+  if (refCode && !localStorage.getItem(STORAGE_CODE_KEY)) {
+    localStorage.setItem(STORAGE_CODE_KEY, refCode);
   }
 }
 

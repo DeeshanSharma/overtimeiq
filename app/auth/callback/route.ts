@@ -3,7 +3,7 @@ import { getSupabaseServiceClient } from '@/lib/supabase/server';
 import dayjs from 'dayjs';
 import { NextResponse, type NextRequest } from 'next/server';
 
-const VALID_SOURCES = new Set(['landing', 'linkedin', 'devto', 'producthunt', 'referral']);
+const VALID_SOURCES = new Set(['landing', 'linkedin', 'devto', 'producthunt', 'twitter', 'referral']);
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
