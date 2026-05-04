@@ -188,7 +188,7 @@ export async function GET(request: NextRequest) {
 
     if (tokens.refresh_token) {
       response.cookies.set('g_rt_once', tokens.refresh_token, {
-        httpOnly: true,
+        httpOnly: process.env.NODE_ENV === 'production',
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         maxAge: 60,
