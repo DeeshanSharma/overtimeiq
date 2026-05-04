@@ -12,8 +12,11 @@
 
 'use client';
 
+import { DB_STORAGE_KEY } from '@/lib/localWorkData';
 import { create } from 'zustand';
 // Token refresh is server-side via /api/google-token (GOOGLE_CLIENT_SECRET not available in browser)
+import { useSessionStore } from './useSessionStore';
+import { useSettingsStore } from './useSettingsStore';
 import { useDBStore } from './useDBStore';
 
 const DRIVE_API = 'https://www.googleapis.com/drive';
@@ -36,6 +39,8 @@ interface SyncState {
   hasPendingUpload: boolean;
 
   setAccessToken: (token: string) => void;
+  /** Before initDB: list Drive, download DB into localStorage or clear blob if no remote file */
+  prefetchDriveIntoLocalStorage: (googleRefreshToken: string) => Promise<void>;
   syncOnLogin: (googleRefreshToken: string) => Promise<void>;
   syncNow: () => Promise<void>;
   uploadToDrive: () => Promise<void>;
@@ -58,6 +63,37 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   setDriveFileId: (id) => set({ driveFileId: id }),
+
+  prefetchDriveIntoLocalStorage: async (googleRefreshToken: string) => {
+    try {
+      const res = await fetch('/api/google-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ refresh_token: googleRefreshToken }),
+      });
+      if (!res.ok) throw new Error(`Token fetch failed: ${await res.text()}`);
+      const { access_token } = await res.json();
+      const searchRes = await driveGet(
+        `${DRIVE_API}/v3/files?q=name%3D'${DB_FILENAME}'%20and%20trashed%3Dfalse&fields=files(id)`,
+        access_token,
+      );
+      const files = (searchRes.files ?? []) as { id: string }[];
+      if (files.length === 0) {
+        localStorage.removeItem(DB_STORAGE_KEY);
+        return;
+      }
+      const fileId = files[0].id;
+      const dl = await fetch(`${DRIVE_API}/v3/files/${fileId}?alt=media`, {
+        headers: { Authorization: `Bearer ${access_token}` },
+      });
+      if (!dl.ok) throw new Error(`Drive prefetch download failed: ${dl.status}`);
+      const buffer = new Uint8Array(await dl.arrayBuffer());
+      localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(Array.from(buffer)));
+    } catch (err) {
+      console.warn('[useSyncStore] prefetchDriveIntoLocalStorage:', err);
+    }
+  },
 
   // ── Token refresh (server-side to keep client_secret off the browser) ──────
   refreshToken: async (): Promise<boolean> => {
@@ -120,7 +156,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }
 
     // Now do the actual Drive sync
-    await performSync(token, set, get);
+    await performSync(token, set);
   },
 
   // ── Manual / debounce-triggered upload ───────────────────────────────────
@@ -197,10 +233,17 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         }
       }
 
-      const now = new Date().toISOString();
-      // runSilent — does NOT re-arm the debounce
-      runSilent('UPDATE settings SET last_synced_at = ? WHERE id = 1', [now]);
-      set({ syncStatus: 'synced', lastSyncedAt: now, hasPendingUpload: false });
+      let driveMtime: string | null = null;
+      if (get().driveFileId) {
+        try {
+          driveMtime = await fetchDriveFileModifiedTime(get().driveFileId!, accessToken);
+        } catch {
+          driveMtime = null;
+        }
+      }
+      const stamp = driveMtime ?? new Date().toISOString();
+      runSilent('UPDATE settings SET last_synced_at = ? WHERE id = 1', [stamp]);
+      set({ syncStatus: 'synced', lastSyncedAt: stamp, hasPendingUpload: false });
       console.log('[useSyncStore] Drive sync complete');
     } catch (err) {
       console.error('[useSyncStore] uploadToDrive failed:', err);
@@ -213,8 +256,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
 // ─── Shared sync logic ────────────────────────────────────────────────────────
 
-async function performSync(token: string, set: (partial: Partial<SyncState>) => void, get: () => SyncState) {
+async function performSync(token: string, set: (partial: Partial<SyncState>) => void) {
   const { saveDB, runSilent, runQuery } = useDBStore.getState();
+  let lastDriveMtime: string | null = null;
 
   try {
     const searchRes = await driveGet(
@@ -230,6 +274,7 @@ async function performSync(token: string, set: (partial: Partial<SyncState>) => 
         const fileId = await uploadNewFile(buf, token);
         set({ driveFileId: fileId });
         runSilent('UPDATE settings SET drive_file_id = ? WHERE id = 1', [fileId]);
+        lastDriveMtime = await fetchDriveFileModifiedTime(fileId, token);
         console.log('[useSyncStore] Created new Drive file:', fileId);
       }
     } else {
@@ -245,22 +290,30 @@ async function performSync(token: string, set: (partial: Partial<SyncState>) => 
       const diffSeconds = Math.abs(driveMs - localMs) / 1000;
 
       if (diffSeconds <= SYNC_SKEW_SECONDS) {
+        lastDriveMtime = driveFile.modifiedTime;
         console.log('[useSyncStore] In sync — no action needed');
       } else if (driveMs > localMs) {
         await downloadFromDrive(driveFile.id, token);
+        lastDriveMtime = await fetchDriveFileModifiedTime(driveFile.id, token);
         console.log('[useSyncStore] Downloaded newer version from Drive');
       } else {
         const buf = saveDB();
         if (buf) {
           await uploadUpdate(driveFile.id, buf, token);
+          lastDriveMtime = await fetchDriveFileModifiedTime(driveFile.id, token);
           console.log('[useSyncStore] Uploaded newer local version to Drive');
+        } else {
+          lastDriveMtime = driveFile.modifiedTime;
         }
       }
     }
 
-    const now = new Date().toISOString();
-    runSilent('UPDATE settings SET last_synced_at = ? WHERE id = 1', [now]);
-    set({ syncStatus: 'synced', lastSyncedAt: now });
+    if (lastDriveMtime) {
+      runSilent('UPDATE settings SET last_synced_at = ? WHERE id = 1', [lastDriveMtime]);
+      set({ syncStatus: 'synced', lastSyncedAt: lastDriveMtime });
+    } else {
+      set({ syncStatus: 'synced' });
+    }
   } catch (err) {
     console.error('[useSyncStore] performSync error:', err);
     set({ syncStatus: 'error' });
@@ -285,6 +338,17 @@ async function driveGet(url: string, token: string): Promise<Record<string, unkn
   });
   if (!res.ok) throw new Error(`Drive GET ${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+/** Drive's modifiedTime (RFC3339) — store as last_synced_at so all devices compare on same clock */
+async function fetchDriveFileModifiedTime(fileId: string, token: string): Promise<string> {
+  const meta = await driveGet(
+    `${DRIVE_API}/v3/files/${encodeURIComponent(fileId)}?fields=modifiedTime`,
+    token,
+  );
+  const mt = meta.modifiedTime as string | undefined;
+  if (!mt) throw new Error('Drive metadata missing modifiedTime');
+  return mt;
 }
 
 async function uploadNewFile(buffer: Uint8Array, token: string): Promise<string> {
@@ -340,7 +404,8 @@ async function downloadFromDrive(fileId: string, token: string): Promise<void> {
   if (!res.ok) throw new Error(`Drive download failed: ${res.status}`);
 
   const buffer = new Uint8Array(await res.arrayBuffer());
-  localStorage.setItem('otiq_db', JSON.stringify(Array.from(buffer)));
-  // Force a full re-init so the new DB is loaded into sql.js memory
-  await useDBStore.getState().initDB();
+  localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(Array.from(buffer)));
+  await useDBStore.getState().initDB({ force: true });
+  useSettingsStore.getState().loadAll();
+  useSessionStore.getState().loadSession();
 }

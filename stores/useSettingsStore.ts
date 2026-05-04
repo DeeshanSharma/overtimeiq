@@ -5,6 +5,7 @@
 
 "use client";
 
+import { mirrorGoogleRefreshToLocalStorage } from "@/lib/localWorkData";
 import { create } from "zustand";
 import { useDBStore } from "./useDBStore";
 
@@ -74,8 +75,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       "SELECT * FROM holidays WHERE year = ? ORDER BY date ASC",
       [year]
     );
+    const s = settingsRow as unknown as Settings | null;
+    if (s?.google_refresh_token) mirrorGoogleRefreshToLocalStorage(s.google_refresh_token);
+
     set({
-      settings: settingsRow as unknown as Settings,
+      settings: s,
       jobs: jobs as unknown as Job[],
       holidays: holidays as unknown as Holiday[],
       isLoaded: true,
@@ -100,6 +104,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   saveGoogleRefreshToken: (token) => {
     const { runSilent } = useDBStore.getState();
+    mirrorGoogleRefreshToLocalStorage(token);
     runSilent("UPDATE settings SET google_refresh_token = ? WHERE id = 1", [token]);
     set((s) => ({
       settings: s.settings ? { ...s.settings, google_refresh_token: token } : s.settings,

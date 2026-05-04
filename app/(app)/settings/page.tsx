@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useSyncStore } from "@/stores/useSyncStore";
 import { useDBStore } from "@/stores/useDBStore";
+import { clearPersistedWorkData } from "@/lib/localWorkData";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import JobEditModal from "@/components/app/settings/JobEditModal";
@@ -23,7 +24,7 @@ interface Job {
 export default function SettingsPage() {
   const { jobs, settings, deleteJob, setDefaultJob, updateSetting, loadAll } = useSettingsStore();
   const { syncStatus, lastSyncedAt, syncNow, uploadToDrive } = useSyncStore();
-  const { execSQL } = useDBStore();
+  const { execSQL, resetAfterLogout } = useDBStore();
   const router = useRouter();
 
   const [editingJob, setEditingJob] = useState<Job | null>(null);
@@ -46,6 +47,8 @@ export default function SettingsPage() {
   }
 
   async function handleSignOut() {
+    clearPersistedWorkData();
+    resetAfterLogout();
     const supabase = getSupabaseBrowserClient();
     await supabase.auth.signOut();
     router.replace("/login");

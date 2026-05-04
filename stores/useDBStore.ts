@@ -12,9 +12,8 @@
 'use client';
 
 import { SCHEMA_SQL, SEED_SETTINGS_SQL, buildDefaultJobSQL, buildHolidaySeedSQL } from '@/lib/db';
+import { DB_STORAGE_KEY } from '@/lib/localWorkData';
 import { create } from 'zustand';
-
-const DB_STORAGE_KEY = 'otiq_db';
 const SCHEMA_VERSION = 1;
 
 // Dynamically imported to avoid SSR issues with WASM
@@ -39,8 +38,10 @@ interface DBState {
   getOne: (sql: string, params?: (string | number | null)[]) => Row | null;
   saveDB: () => Uint8Array | null;
 
-  // Lifecycle
-  initDB: () => Promise<void>;
+  // Lifecycle — pass { force: true } after replacing localStorage blob (e.g. Drive download)
+  initDB: (opts?: { force?: boolean }) => Promise<void>;
+  /** Close sql.js + clear flags (call with clearPersistedWorkData on sign-out) */
+  resetAfterLogout: () => void;
 
   _driveDebounceTrigger: (() => void) | null;
   setDriveDebounceTrigger: (fn: () => void) => void;
@@ -57,6 +58,18 @@ export const useDBStore = create<DBState>((set, get) => ({
   _driveDebounceTrigger: null,
 
   setDriveDebounceTrigger: (fn) => set({ _driveDebounceTrigger: fn }),
+
+  resetAfterLogout: () => {
+    const { db } = get();
+    if (db) {
+      try {
+        db.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    set({ db: null, isReady: false, isLoading: false, error: null });
+  },
 
   runQuery: (sql, params = []) => {
     const { db } = get();
@@ -129,8 +142,21 @@ export const useDBStore = create<DBState>((set, get) => ({
     }
   },
 
-  initDB: async () => {
-    if (get().isReady || get().isLoading) return;
+  initDB: async (opts) => {
+    if (opts?.force) {
+      const { db } = get();
+      if (db) {
+        try {
+          db.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      set({ db: null, isReady: false, isLoading: false, error: null });
+    } else if (get().isReady || get().isLoading) {
+      return;
+    }
+
     set({ isLoading: true, error: null });
 
     try {

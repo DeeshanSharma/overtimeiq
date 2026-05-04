@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { clearPersistedWorkData } from "@/lib/localWorkData";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useDBStore } from "@/stores/useDBStore";
 
 interface WaitlistEntry {
   id: string;
@@ -60,6 +64,7 @@ const SOURCE_LABELS: Record<string, string> = {
 const appUrl = typeof window !== "undefined" ? window.location.origin : "";
 
 export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
+  const router = useRouter();
   const [tab, setTab] = useState<"waitlist" | "invites" | "create">("waitlist");
   const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
@@ -150,33 +155,39 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
 
   const isExpired = (dt: string) => new Date(dt) < new Date();
 
-  // Compute row status
-  function rowStatus(w: WaitlistEntry): { label: string; color: string } {
-    // User already has beta/active status — they're in
-    if (w.user && w.user.status !== "waitlist") {
-      return { label: w.user.status, color: "#16a34a" };
-    }
-    // Has a used invite
-    if (w.invite?.used_at) {
-      return { label: "joined", color: "#16a34a" };
-    }
-    // Has an active (unexpired, unused) invite
-    if (w.invite && !w.invite.used_at && !isExpired(w.invite.expires_at)) {
-      return { label: "invited", color: "#d97706" };
-    }
-    // Has an expired invite
-    if (w.invite && isExpired(w.invite.expires_at) && !w.invite.used_at) {
-      return { label: "invite expired", color: "#dc2626" };
-    }
-    // No invite at all — pending
-    return { label: "pending", color: "#6b6b5e" };
+  async function handleSignOut() {
+    clearPersistedWorkData();
+    useDBStore.getState().resetAfterLogout();
+    const supabase = getSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    router.replace("/login");
   }
 
-  // Can we send/show an invite action for this row?
+  // Compute row status (labels distinct from raw users.status to avoid colour clashes)
+  function rowStatus(w: WaitlistEntry): { label: string; color: string } {
+    const u = w.user;
+    if (u && (u.status === "active" || u.status === "beta")) {
+      return { label: "Joined", color: "#16a34a" };
+    }
+    if (u && u.status === "invited") {
+      return { label: "Pending claim", color: "#d97706" };
+    }
+    if (w.converted_at || w.invite?.used_at) {
+      return { label: "Joined", color: "#16a34a" };
+    }
+    if (w.invite && !w.invite.used_at && !isExpired(w.invite.expires_at)) {
+      return { label: "Invite sent", color: "#d97706" };
+    }
+    if (w.invite && isExpired(w.invite.expires_at) && !w.invite.used_at) {
+      return { label: "Invite expired", color: "#dc2626" };
+    }
+    return { label: "Pending", color: "#6b6b5e" };
+  }
+
   function canInvite(w: WaitlistEntry): boolean {
-    // Already in the app
-    if (w.user && w.user.status !== "waitlist") return false;
-    // Has an active unused invite — show copy link instead
+    if (w.converted_at) return false;
+    if (w.invite?.used_at) return false;
+    if (w.user?.status === "active" || w.user?.status === "beta") return false;
     return true;
   }
 
@@ -185,9 +196,9 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
   }
 
   // Stats
-  const pending = waitlist.filter(w => rowStatus(w).label === "pending").length;
-  const invited = waitlist.filter(w => rowStatus(w).label === "invited").length;
-  const joined  = waitlist.filter(w => ["joined", "beta", "active"].includes(rowStatus(w).label)).length;
+  const pending = waitlist.filter(w => rowStatus(w).label === "Pending").length;
+  const invited = waitlist.filter(w => rowStatus(w).label === "Invite sent").length;
+  const joined = waitlist.filter(w => rowStatus(w).label === "Joined").length;
 
   return (
     <div style={{ minHeight: "100vh", background: "#f5f0e8", fontFamily: "var(--font-mono)", color: "#0e0e0e" }}>
@@ -205,7 +216,24 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
           <span style={{ fontFamily: "var(--font-serif)", fontSize: "1rem", letterSpacing: "-0.02em" }}>OvertimeIQ</span>
           <span style={{ marginLeft: "10px", fontSize: "0.65rem", padding: "2px 7px", background: "#0e0e0e", color: "#f5f0e8", letterSpacing: "0.08em" }}>ADMIN</span>
         </div>
-        <span style={{ fontSize: "0.72rem", color: "#6b6b5e" }}>{adminEmail}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+          <span style={{ fontSize: "0.72rem", color: "#6b6b5e" }}>{adminEmail}</span>
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            style={{
+              padding: "6px 12px",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.72rem",
+              border: "1px solid #d1c9b8",
+              background: "white",
+              color: "#0e0e0e",
+              cursor: "pointer",
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <div style={{ maxWidth: "1000px", margin: "0 auto", padding: "28px 32px" }}>
@@ -263,6 +291,7 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
                       {waitlist.map(w => {
                         const { label, color } = rowStatus(w);
                         const activeInvite = hasActiveInvite(w);
+                        const showInviteActions = canInvite(w);
                         const inviteLink = w.invite ? `${appUrl}/join/${w.invite.token}` : null;
 
                         return (
@@ -290,14 +319,13 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
                               <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
 
                                 {/* If they have an active invite — show Copy link */}
-                                {activeInvite && inviteLink && (
+                                {showInviteActions && activeInvite && inviteLink && (
                                   <button onClick={() => copyLink(inviteLink)} style={actionBtn}>
                                     Copy link
                                   </button>
                                 )}
 
-                                {/* Always show invite/resend option unless they're already in */}
-                                {canInvite(w) && (
+                                {showInviteActions && (
                                   <InlineInviteButton
                                     email={w.email}
                                     existingPlan={w.invite?.plan_grant}
@@ -306,8 +334,7 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
                                   />
                                 )}
 
-                                {/* Revoke active invite */}
-                                {activeInvite && w.invite && (
+                                {showInviteActions && activeInvite && w.invite && (
                                   <button
                                     onClick={() => revokeInvite(w.invite!.id, w.email)}
                                     style={{ ...actionBtn, color: "#dc2626", borderColor: "#dc262640" }}

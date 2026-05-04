@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { GOOGLE_REFRESH_LS_KEY, peekGoogleRefreshTokenFromLocalDb } from "@/lib/localWorkData";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useDBStore } from "@/stores/useDBStore";
 import { useSyncStore } from "@/stores/useSyncStore";
@@ -17,7 +18,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const bootstrapped = useRef(false);
 
   const { initDB, isReady } = useDBStore();
-  const { syncOnLogin } = useSyncStore();
+  const { syncOnLogin, prefetchDriveIntoLocalStorage } = useSyncStore();
   const { initPro } = useProStore();
   const { loadAll, saveProToken, saveGoogleRefreshToken } = useSettingsStore();
   const { loadSession } = useSessionStore();
@@ -52,49 +53,46 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // 3. Initialise SQLite DB
+    const grtCookie = document.cookie
+      .split(";")
+      .find(c => c.trim().startsWith("g_rt_once="));
+    const rtFromCookie = grtCookie
+      ? decodeURIComponent(grtCookie.split("=").slice(1).join("=").trim()) || null
+      : null;
+
+    let googleRefreshToken: string | null = rtFromCookie;
+
+    if (!googleRefreshToken) {
+      try {
+        googleRefreshToken = localStorage.getItem(GOOGLE_REFRESH_LS_KEY);
+      } catch {
+        googleRefreshToken = null;
+      }
+    }
+
+    if (!googleRefreshToken) {
+      googleRefreshToken = await peekGoogleRefreshTokenFromLocalDb();
+    }
+
+    // Probe Drive + optional download into localStorage before sql.js opens (stops empty local overwriting Drive)
+    if (googleRefreshToken) {
+      await prefetchDriveIntoLocalStorage(googleRefreshToken);
+    }
+
     await initDB();
 
-    // Re-read after async initDB
     if (useDBStore.getState().error) {
       addToast({ type: "error", message: "Failed to initialise database. Please refresh." });
       return;
     }
 
-    // 4. Load settings + jobs + holidays into store
     loadAll();
 
-    // 5. Handle Google refresh token
-    //
-    //    First login: the auth callback sets a one-time cookie g_rt_once.
-    //    Read it, save to SQLite (using runSilent so it doesn't arm debounce),
-    //    then pass directly to syncOnLogin.
-    //
-    //    Returning user: read the refresh token saved in SQLite from last login
-    //    and call syncOnLogin the same way.
-    //
-    //    In both cases syncOnLogin gets a fresh access token server-side, then
-    //    does the Drive compare-and-sync.
-
-    let googleRefreshToken: string | null = null;
-
-    // Check for first-login cookie
-    const grtCookie = document.cookie
-      .split(";")
-      .find(c => c.trim().startsWith("g_rt_once="));
-
-    if (grtCookie) {
-      const rt = decodeURIComponent(grtCookie.split('=').slice(1).join('=').trim());
-      if (rt) {
-        googleRefreshToken = rt;
-        // Save to SQLite silently — doesn't trigger debounce
-        saveGoogleRefreshToken(rt);
-        // Expire the one-time cookie immediately
-        document.cookie = "g_rt_once=; path=/; max-age=0";
-      }
+    if (rtFromCookie) {
+      saveGoogleRefreshToken(rtFromCookie);
+      document.cookie = "g_rt_once=; path=/; max-age=0";
     }
 
-    // Fall back to whatever is already in SQLite for returning users
     if (!googleRefreshToken) {
       const row = useDBStore.getState().getOne(
         "SELECT google_refresh_token FROM settings WHERE id = 1"
@@ -102,7 +100,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       googleRefreshToken = (row?.google_refresh_token as string) ?? null;
     }
 
-    // 6. Drive sync — always runs if we have a refresh token
+    // Drive sync — reconcile timestamps / upload if needed
     if (googleRefreshToken) {
       // Fire and forget — don't block the rest of bootstrap on sync
       syncOnLogin(googleRefreshToken).catch(err =>
@@ -112,13 +110,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       console.warn("[AppLayout] No google_refresh_token — Drive sync skipped");
     }
 
-    // 7. Wire the debounce trigger: every execSQL write → syncNow after 10s
+    // Wire the debounce trigger: every execSQL write → syncNow after 10s
     //    Must be set AFTER bootstrap so the debounce doesn't fire during init
     useDBStore.getState().setDriveDebounceTrigger(() => {
       useSyncStore.getState().syncNow();
     });
 
-    // 8. Pro token — verify cached + fetch fresh if needed
+    // Pro token — verify cached + fetch fresh if needed
     const cachedToken = useSettingsStore.getState().settings?.pro_token ?? null;
     await initPro(user.id, cachedToken);
 
@@ -128,13 +126,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       saveProToken(freshToken);
     }
 
-    // 9. Storage durability check
+    // Storage durability check
     if (navigator.storage?.persisted) {
       const persisted = await navigator.storage.persisted();
       if (!persisted) setStorageDurabilityWarning(true);
     }
 
-    // 10. Recover any interrupted punch-in session
+    // Recover any interrupted punch-in session
     loadSession();
   }
 
