@@ -188,7 +188,8 @@ export async function GET(request: NextRequest) {
 
     if (tokens.refresh_token) {
       response.cookies.set('g_rt_once', tokens.refresh_token, {
-        httpOnly: process.env.NODE_ENV === 'production',
+        // Must not be HttpOnly: AppLayout reads once via document.cookie → SQLite/localStorage mirror.
+        httpOnly: false,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         maxAge: 60,
