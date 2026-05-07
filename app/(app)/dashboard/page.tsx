@@ -200,6 +200,7 @@ export default function DashboardPage() {
 
       {/* ── Timeframe tabs ───────────────────────────────── */}
       <div
+        data-onboarding="timeframe-tabs"
         style={{
           display: 'flex',
           gap: '0',

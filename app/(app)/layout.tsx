@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { GOOGLE_REFRESH_LS_KEY, peekGoogleRefreshTokenFromLocalDb } from "@/lib/localWorkData";
+import TabBar from "@/components/app/shared/TabBar";
+import TopBar from "@/components/app/shared/TopBar";
+import {
+  GOOGLE_REFRESH_LS_KEY,
+  peekGoogleRefreshTokenFromLocalDb,
+} from "@/lib/localWorkData";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useDBStore } from "@/stores/useDBStore";
-import { useSyncStore } from "@/stores/useSyncStore";
 import { useProStore } from "@/stores/useProStore";
-import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useSessionStore } from "@/stores/useSessionStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
+import { useSyncStore } from "@/stores/useSyncStore";
 import { useUIStore } from "@/stores/useUIStore";
-import TopBar from "@/components/app/shared/TopBar";
-import TabBar from "@/components/app/shared/TabBar";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -19,7 +22,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const bootstrapped = useRef(false);
 
   const { initDB, isReady } = useDBStore();
-  const { syncOnLogin, prefetchDriveIntoLocalStorage, syncIssue, clearSyncIssue } = useSyncStore();
+  const {
+    syncOnLogin,
+    prefetchDriveIntoLocalStorage,
+    syncIssue,
+    clearSyncIssue,
+  } = useSyncStore();
   const { initPro } = useProStore();
   const { loadAll, saveProToken, saveGoogleRefreshToken } = useSettingsStore();
   const { loadSession } = useSessionStore();
@@ -31,7 +39,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
     bootstrap();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -47,7 +55,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     const supabase = getSupabaseBrowserClient();
 
     // 1. Verify Supabase session
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
     if (authError || !user) {
       router.replace("/login");
       return;
@@ -67,9 +78,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     const grtCookie = document.cookie
       .split(";")
-      .find(c => c.trim().startsWith("g_rt_once="));
+      .find((c) => c.trim().startsWith("g_rt_once="));
     const rtFromCookie = grtCookie
-      ? decodeURIComponent(grtCookie.split("=").slice(1).join("=").trim()) || null
+      ? decodeURIComponent(grtCookie.split("=").slice(1).join("=").trim()) ||
+        null
       : null;
 
     let googleRefreshToken: string | null = rtFromCookie;
@@ -94,7 +106,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     await initDB();
 
     if (useDBStore.getState().error) {
-      addToast({ type: "error", message: "Failed to initialise database. Please refresh." });
+      addToast({
+        type: "error",
+        message: "Failed to initialise database. Please refresh.",
+      });
       return;
     }
 
@@ -106,17 +121,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
 
     if (!googleRefreshToken) {
-      const row = useDBStore.getState().getOne(
-        "SELECT google_refresh_token FROM settings WHERE id = 1"
-      );
+      const row = useDBStore
+        .getState()
+        .getOne("SELECT google_refresh_token FROM settings WHERE id = 1");
       googleRefreshToken = (row?.google_refresh_token as string) ?? null;
     }
 
     // Drive sync — reconcile timestamps / upload if needed
     if (googleRefreshToken) {
       // Fire and forget — don't block the rest of bootstrap on sync
-      syncOnLogin(googleRefreshToken).catch(err =>
-        console.error("[AppLayout] syncOnLogin error:", err)
+      syncOnLogin(googleRefreshToken).catch((err) =>
+        console.error("[AppLayout] syncOnLogin error:", err),
       );
     } else {
       console.warn("[AppLayout] No google_refresh_token — Drive sync skipped");
@@ -154,19 +169,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   if (!isReady) return <AppSkeleton />;
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#f5f0e8",
-      fontFamily: "var(--font-mono)",
-      display: "flex",
-      flexDirection: "column",
-    }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#f5f0e8",
+        fontFamily: "var(--font-mono)",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <StorageDurabilityBanner />
       <SyncIssueBanner syncIssue={syncIssue} onDismiss={clearSyncIssue} />
       <TopBar />
-      <main style={{ flex: 1, overflow: "auto" }}>
-        {children}
-      </main>
+      <main style={{ flex: 1, overflow: "auto" }}>{children}</main>
       <TabBar />
       <OnboardingWalkthrough
         pathname={pathname}
@@ -206,23 +221,31 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
 function AppSkeleton() {
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#f5f0e8",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      fontFamily: "var(--font-mono)",
-    }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#f5f0e8",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "var(--font-mono)",
+      }}
+    >
       <div style={{ textAlign: "center" }}>
-        <div style={{
-          width: "32px", height: "32px",
-          border: "2px solid #d1c9b8", borderTopColor: "#0e0e0e",
-          borderRadius: "50%",
-          animation: "spin 0.8s linear infinite",
-          margin: "0 auto 16px",
-        }} />
-        <p style={{ fontSize: "0.78rem", color: "#6b6b5e" }}>Loading database…</p>
+        <div
+          style={{
+            width: "32px",
+            height: "32px",
+            border: "2px solid #d1c9b8",
+            borderTopColor: "#0e0e0e",
+            borderRadius: "50%",
+            animation: "spin 0.8s linear infinite",
+            margin: "0 auto 16px",
+          }}
+        />
+        <p style={{ fontSize: "0.78rem", color: "#6b6b5e" }}>
+          Loading database…
+        </p>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     </div>
@@ -233,19 +256,22 @@ function StorageDurabilityBanner() {
   const { storageDurabilityWarning } = useUIStore();
   if (!storageDurabilityWarning) return null;
   return (
-    <div style={{
-      padding: "10px 20px",
-      background: "#fef3c7",
-      borderBottom: "1px solid #d97706",
-      fontSize: "0.75rem",
-      color: "#92400e",
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-    }}>
+    <div
+      style={{
+        padding: "10px 20px",
+        background: "#fef3c7",
+        borderBottom: "1px solid #d97706",
+        fontSize: "0.75rem",
+        color: "#92400e",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+      }}
+    >
       <span>⚠</span>
       <span>
-        Your local data may be cleared by the browser. Drive sync is your backup — keep it active.
+        Your local data may be cleared by the browser. Drive sync is your backup
+        — keep it active.
       </span>
     </div>
   );
@@ -272,18 +298,20 @@ function SyncIssueBanner({
   }
 
   return (
-    <div style={{
-      padding: "10px 20px",
-      background: "#fff7ed",
-      borderBottom: "1px solid #d97706",
-      fontSize: "0.75rem",
-      color: "#92400e",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: "12px",
-      flexWrap: "wrap",
-    }}>
+    <div
+      style={{
+        padding: "10px 20px",
+        background: "#fff7ed",
+        borderBottom: "1px solid #d97706",
+        fontSize: "0.75rem",
+        color: "#92400e",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+        flexWrap: "wrap",
+      }}
+    >
       <span>{message}</span>
       <div style={{ display: "flex", gap: "8px" }}>
         {syncIssue === "drive_permission" && (
@@ -321,21 +349,33 @@ function SyncIssueBanner({
   );
 }
 
-const ONBOARDING_STEPS: { title: string; body: string; route: "/log" | "/dashboard" | "/settings" }[] = [
+const ONBOARDING_STEPS: {
+  title: string;
+  body: string;
+  route: "/log" | "/dashboard" | "/settings";
+  targetSelector: string;
+  targetLabel: string;
+}[] = [
   {
-    title: "Track from Log tab",
-    body: "Start with Punch in for live timer, or use Manual entry for past shifts.",
+    title: "Track your overtime",
+    body: "Click the Punch in button to start a live timer for your shift.",
     route: "/log",
+    targetSelector: '[data-onboarding="punch-in"]',
+    targetLabel: "Punch in",
   },
   {
-    title: "Read trends in Dashboard",
-    body: "Switch timeframe, review hours and earnings, and compare status and location.",
+    title: "Review your trends",
+    body: "Switch between timeframes to see your hours and earnings over different periods.",
     route: "/dashboard",
+    targetSelector: '[data-onboarding="timeframe-tabs"]',
+    targetLabel: "Timeframe tabs",
   },
   {
-    title: "Set up in Settings",
-    body: "Add jobs, tune rates and currency, then use Sync now to back up to Drive.",
+    title: "Keep your data safe",
+    body: "Click Sync now to back up your work data to Google Drive.",
     route: "/settings",
+    targetSelector: '[data-onboarding="sync-now"]',
+    targetLabel: "Sync now",
   },
 ];
 
@@ -352,59 +392,250 @@ function OnboardingWalkthrough({
   onNext: () => void;
   onSkip: () => void;
 }) {
-  if (!open) return null;
+  const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
   const current = ONBOARDING_STEPS[step] ?? ONBOARDING_STEPS[0];
   const onTargetRoute = pathname === current.route;
   const isLast = step === ONBOARDING_STEPS.length - 1;
 
+  useEffect(() => {
+    if (!open || !onTargetRoute) {
+      setTargetRect(null);
+      return;
+    }
+
+    const updateTarget = () => {
+      const el = document.querySelector(current.targetSelector);
+      if (el) {
+        setTargetRect(el.getBoundingClientRect());
+      }
+    };
+
+    updateTarget();
+    window.addEventListener("resize", updateTarget);
+    window.addEventListener("scroll", updateTarget, true);
+
+    const interval = setInterval(updateTarget, 100);
+
+    return () => {
+      window.removeEventListener("resize", updateTarget);
+      window.removeEventListener("scroll", updateTarget, true);
+      clearInterval(interval);
+    };
+  }, [open, onTargetRoute, current.targetSelector, step]);
+
+  if (!open) return null;
+
   return (
-    <div style={{
-      position: "fixed",
-      inset: 0,
-      background: "rgba(14,14,14,0.45)",
-      zIndex: 50,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: "20px",
-    }}>
-      <div style={{
-        width: "100%",
-        maxWidth: "460px",
-        background: "#f5f0e8",
-        border: "1px solid #d1c9b8",
-        padding: "20px",
-        fontFamily: "var(--font-mono)",
-      }}>
-        <p style={{ margin: "0 0 8px", fontSize: "0.68rem", letterSpacing: "0.1em", color: "#6b6b5e", textTransform: "uppercase" }}>
-          Quick walkthrough · {step + 1}/{ONBOARDING_STEPS.length}
+    <>
+      {/* Dark overlay with cutout */}
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 50,
+          pointerEvents: targetRect ? "none" : "auto",
+        }}
+      >
+        {/* Top */}
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: targetRect ? targetRect.top : 0,
+            background: "rgba(14,14,14,0.75)",
+            pointerEvents: "auto",
+          }}
+        />
+        {/* Bottom */}
+        {targetRect && (
+          <div
+            style={{
+              position: "absolute",
+              top: targetRect.bottom,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: "rgba(14,14,14,0.75)",
+              pointerEvents: "auto",
+            }}
+          />
+        )}
+        {/* Left */}
+        {targetRect && (
+          <div
+            style={{
+              position: "absolute",
+              top: targetRect.top,
+              left: 0,
+              width: targetRect.left,
+              height: targetRect.height,
+              background: "rgba(14,14,14,0.75)",
+              pointerEvents: "auto",
+            }}
+          />
+        )}
+        {/* Right */}
+        {targetRect && (
+          <div
+            style={{
+              position: "absolute",
+              top: targetRect.top,
+              left: targetRect.right,
+              right: 0,
+              height: targetRect.height,
+              background: "rgba(14,14,14,0.75)",
+              pointerEvents: "auto",
+            }}
+          />
+        )}
+      </div>
+
+      {/* Highlight border around target */}
+      {targetRect && (
+        <div
+          style={{
+            position: "fixed",
+            top: targetRect.top - 4,
+            left: targetRect.left - 4,
+            width: targetRect.width + 8,
+            height: targetRect.height + 8,
+            border: "2px solid #d97706",
+            borderRadius: "4px",
+            zIndex: 51,
+            pointerEvents: "none",
+            boxShadow:
+              "0 0 0 4px rgba(217, 119, 6, 0.2), 0 0 20px rgba(217, 119, 6, 0.3)",
+          }}
+        />
+      )}
+
+      {/* Tooltip card */}
+      <div
+        style={{
+          position: "fixed",
+          zIndex: 52,
+          ...(targetRect
+            ? {
+                top: targetRect.bottom + 16,
+                left: Math.min(
+                  targetRect.left,
+                  typeof window !== "undefined"
+                    ? window.innerWidth - 340
+                    : targetRect.left,
+                ),
+              }
+            : {
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+              }),
+          minWidth: "320px",
+          background: "#f5f0e8",
+          border: "1px solid #d1c9b8",
+          padding: "20px",
+          fontFamily: "var(--font-mono)",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            marginBottom: "8px",
+            padding: "2px 8px",
+            background: "#d97706",
+            color: "white",
+            fontSize: "0.65rem",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          }}
+        >
+          <span>★</span>
+          <span>{current.targetLabel}</span>
+        </div>
+        <p
+          style={{
+            margin: "0 0 8px",
+            fontSize: "0.65rem",
+            letterSpacing: "0.1em",
+            color: "#6b6b5e",
+            textTransform: "uppercase",
+          }}
+        >
+          Quick walkthrough · Step {step + 1} of {ONBOARDING_STEPS.length}
         </p>
-        <p style={{ margin: "0 0 8px", fontFamily: "var(--font-serif)", fontSize: "1.45rem", color: "#0e0e0e", lineHeight: 1.2 }}>
+        <p
+          style={{
+            margin: "0 0 8px",
+            fontFamily: "var(--font-serif)",
+            fontSize: "1.45rem",
+            color: "#0e0e0e",
+            lineHeight: 1.2,
+          }}
+        >
           {current.title}
         </p>
-        <p style={{ margin: "0 0 16px", fontSize: "0.8rem", color: "#6b6b5e", lineHeight: 1.6 }}>
+        <p
+          style={{
+            margin: "0 0 16px",
+            fontSize: "0.8rem",
+            color: "#6b6b5e",
+            lineHeight: 1.5,
+          }}
+        >
           {current.body}
         </p>
         {!onTargetRoute && (
-          <p style={{ margin: "0 0 12px", fontSize: "0.72rem", color: "#d97706" }}>
+          <p
+            style={{
+              margin: "0 0 12px",
+              fontSize: "0.72rem",
+              color: "#d97706",
+            }}
+          >
             Moving you to {current.route} for this step.
           </p>
         )}
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "8px",
+          }}
+        >
           <button
             onClick={onSkip}
-            style={{ border: "1px solid #d1c9b8", background: "none", color: "#6b6b5e", fontFamily: "var(--font-mono)", fontSize: "0.75rem", padding: "8px 12px", cursor: "pointer" }}
+            style={{
+              border: "1px solid #d1c9b8",
+              background: "none",
+              color: "#6b6b5e",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.75rem",
+              padding: "8px 12px",
+              cursor: "pointer",
+            }}
           >
-            Skip
+            Skip tour
           </button>
           <button
             onClick={onNext}
-            style={{ border: "none", background: "#0e0e0e", color: "#f5f0e8", fontFamily: "var(--font-mono)", fontSize: "0.75rem", padding: "8px 12px", cursor: "pointer" }}
+            style={{
+              border: "none",
+              background: "#0e0e0e",
+              color: "#f5f0e8",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.75rem",
+              padding: "8px 12px",
+              cursor: "pointer",
+            }}
           >
-            {isLast ? "Finish" : "Next"}
+            {isLast ? "Finish" : "Next →"}
           </button>
         </div>
       </div>
-    </div>
+    </>
   );
 }
