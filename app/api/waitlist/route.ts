@@ -14,7 +14,7 @@ function getServiceClient() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!);
 }
 
-const VALID_SOURCES = new Set(['landing', 'linkedin', 'devto', 'producthunt', 'twitter', 'referral']);
+const VALID_SOURCES = new Set(['landing', 'linkedin', 'devto', 'hashnode', 'medium', 'producthunt', 'twitter', 'referral']);
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);

@@ -33,6 +33,8 @@ const REF_MAP: Record<string, string> = {
   linkedin:     "linkedin",
   devto:        "devto",
   "dev.to":     "devto",
+  hashnode:     "hashnode",
+  medium:       "medium",
   producthunt:  "producthunt",
   ph:           "producthunt",
   referral:     "referral",

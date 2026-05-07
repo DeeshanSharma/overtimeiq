@@ -49,11 +49,13 @@ create table if not exists public.waitlist (
   -- "landing"     = direct visit, no ref param
   -- "linkedin"    = ?ref=linkedin
   -- "devto"       = ?ref=devto or ?ref=dev.to
+  -- "hashnode"    = ?ref=hashnode
+  -- "medium"      = ?ref=medium
   -- "producthunt" = ?ref=producthunt or ?ref=ph
   -- "twitter"     = ?ref=twitter or ?ref=x
   -- "referral"    = personal referral link or unknown ?ref value
   source        text        not null default 'landing'
-                check (source in ('landing', 'linkedin', 'devto', 'producthunt', 'twitter', 'referral')),
+                check (source in ('landing', 'linkedin', 'devto', 'hashnode', 'medium', 'producthunt', 'twitter', 'referral')),
   referral_code text        default null,
   converted_at  timestamptz default null,
   created_at    timestamptz not null default now()

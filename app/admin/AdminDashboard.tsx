@@ -55,6 +55,8 @@ const SOURCE_LABELS: Record<string, string> = {
   landing: "Direct",
   linkedin: "LinkedIn",
   devto: "dev.to",
+  hashnode: "Hashnode",
+  medium: "Medium",
   producthunt: "ProductHunt",
   twitter: "Twitter",
   referral: "Referral",
