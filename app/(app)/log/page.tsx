@@ -141,8 +141,12 @@ export default function LogPage() {
             </ActionBtn>
           </div>
         ) : null}
-        <ActionBtn onClick={() => setModal('manual')}>+ Manual entry</ActionBtn>
-        <ActionBtn onClick={() => setModal('import')}>↑ Import</ActionBtn>
+        <div data-onboarding="manual-entry">
+          <ActionBtn onClick={() => setModal('manual')}>+ Manual entry</ActionBtn>
+        </div>
+        <div data-onboarding="import">
+          <ActionBtn onClick={() => setModal('import')}>↑ Import</ActionBtn>
+        </div>
       </div>
 
       {/* Log list */}

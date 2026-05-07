@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS settings (
   holiday_auto_detect     INTEGER NOT NULL DEFAULT 1,
   google_refresh_token    TEXT    DEFAULT NULL,
   pro_token               TEXT    DEFAULT NULL,
-  pro_plan                TEXT    DEFAULT NULL
+  pro_plan                TEXT    DEFAULT NULL,
+  onboarding_done         INTEGER NOT NULL DEFAULT 0
 );
 
 -- Performance indexes
@@ -96,8 +97,16 @@ CREATE INDEX IF NOT EXISTS idx_hols_year     ON holidays(year);
 // ─── Default settings seed ────────────────────────────────────────────────────
 
 export const SEED_SETTINGS_SQL = `
-INSERT OR IGNORE INTO settings (id, currency_symbol, burnout_threshold_hours)
-VALUES (1, '₹', 15.0);
+INSERT OR IGNORE INTO settings (id, currency_symbol, burnout_threshold_hours, onboarding_done)
+VALUES (1, '₹', 15.0, 0);
+`;
+
+// ─── Migration SQL (v1 → v2) ────────────────────────────────────────────────
+// Add onboarding_done column to existing databases. Safe to run multiple times.
+// Wrapped in try/catch by caller - SQLite will error if column exists.
+
+export const MIGRATION_V2_SQL = `
+ALTER TABLE settings ADD COLUMN onboarding_done INTEGER NOT NULL DEFAULT 0;
 `;
 
 // ─── Default job seed ─────────────────────────────────────────────────────────
@@ -118,37 +127,33 @@ WHERE id = 1 AND default_job_id IS NULL;
 // Source: Ministry of Personnel, Public Grievances and Pensions
 
 export const CENTRAL_HOLIDAYS_2025 = [
-  { date: "2025-01-26", name: "Republic Day" },
-  { date: "2025-03-30", name: "Holi" },
-  { date: "2025-04-10", name: "Id-ul-Fitr (Eid)" },
-  { date: "2025-04-14", name: "Dr. Ambedkar Jayanti" },
-  { date: "2025-04-18", name: "Good Friday" },
-  { date: "2025-05-12", name: "Buddha Purnima" },
-  { date: "2025-06-07", name: "Id-ul-Zuha (Bakrid)" },
-  { date: "2025-07-06", name: "Muharram" },
-  { date: "2025-08-15", name: "Independence Day" },
-  { date: "2025-09-05", name: "Janmashtami" },
-  { date: "2025-10-02", name: "Gandhi Jayanti" },
-  { date: "2025-10-02", name: "Mahatma Gandhi Jayanti" },
-  { date: "2025-10-20", name: "Dussehra" },
-  { date: "2025-11-05", name: "Milad-un-Nabi" },
-  { date: "2025-11-20", name: "Guru Nanak Jayanti" },
-  { date: "2025-10-23", name: "Diwali (Deepawali)" },
-  { date: "2025-12-25", name: "Christmas Day" },
+  { date: '2025-01-26', name: 'Republic Day' },
+  { date: '2025-03-30', name: 'Holi' },
+  { date: '2025-04-10', name: 'Id-ul-Fitr (Eid)' },
+  { date: '2025-04-14', name: 'Dr. Ambedkar Jayanti' },
+  { date: '2025-04-18', name: 'Good Friday' },
+  { date: '2025-05-12', name: 'Buddha Purnima' },
+  { date: '2025-06-07', name: 'Id-ul-Zuha (Bakrid)' },
+  { date: '2025-07-06', name: 'Muharram' },
+  { date: '2025-08-15', name: 'Independence Day' },
+  { date: '2025-09-05', name: 'Janmashtami' },
+  { date: '2025-10-02', name: 'Gandhi Jayanti' },
+  { date: '2025-10-02', name: 'Mahatma Gandhi Jayanti' },
+  { date: '2025-10-20', name: 'Dussehra' },
+  { date: '2025-11-05', name: 'Milad-un-Nabi' },
+  { date: '2025-11-20', name: 'Guru Nanak Jayanti' },
+  { date: '2025-10-23', name: 'Diwali (Deepawali)' },
+  { date: '2025-12-25', name: 'Christmas Day' },
 ];
 
 export function buildHolidaySeedSQL(year: number): string {
-  const holidays =
-    year === 2025 ? CENTRAL_HOLIDAYS_2025 : [];
-  if (holidays.length === 0) return "";
+  const holidays = year === 2025 ? CENTRAL_HOLIDAYS_2025 : [];
+  if (holidays.length === 0) return '';
 
   const rows = holidays
     .filter((h, i, arr) => arr.findIndex((x) => x.date === h.date) === i) // dedupe
-    .map(
-      (h) =>
-        `('${h.date}', '${h.name.replace(/'/g, "''")}', 'central', 1, ${year})`
-    )
-    .join(",\n  ");
+    .map((h) => `('${h.date}', '${h.name.replace(/'/g, "''")}', 'central', 1, ${year})`)
+    .join(',\n  ');
 
   return `INSERT OR IGNORE INTO holidays (date, name, type, is_active, year)
 VALUES

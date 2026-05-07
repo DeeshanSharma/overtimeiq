@@ -11,7 +11,7 @@
 
 'use client';
 
-import { SCHEMA_SQL, SEED_SETTINGS_SQL, buildDefaultJobSQL, buildHolidaySeedSQL } from '@/lib/db';
+import { MIGRATION_V2_SQL, SCHEMA_SQL, SEED_SETTINGS_SQL, buildDefaultJobSQL, buildHolidaySeedSQL } from '@/lib/db';
 import { DB_STORAGE_KEY } from '@/lib/localWorkData';
 import { create } from 'zustand';
 const SCHEMA_VERSION = 1;
@@ -180,6 +180,14 @@ export const useDBStore = create<DBState>((set, get) => ({
 
       // Run schema migrations
       db.run(SCHEMA_SQL);
+
+      // Run data migrations (v1 → v2: add onboarding_done column)
+      // Wrapped in try/catch - safe to fail if column already exists
+      try {
+        db.run(MIGRATION_V2_SQL);
+      } catch {
+        // Column likely already exists - this is fine
+      }
 
       // Check and update schema version
       const versionRow = db.exec('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1');

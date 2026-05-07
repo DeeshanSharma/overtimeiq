@@ -77,7 +77,7 @@ export default function SettingsPage() {
       <section style={{ marginBottom: '36px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <p style={sectionLabel}>Jobs</p>
-          <button onClick={() => setAddingJob(true)} style={outlineBtn}>
+          <button data-onboarding="add-job" onClick={() => setAddingJob(true)} style={outlineBtn}>
             + Add job
           </button>
         </div>
