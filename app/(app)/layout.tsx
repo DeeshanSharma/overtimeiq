@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { GOOGLE_REFRESH_LS_KEY, peekGoogleRefreshTokenFromLocalDb } from "@/lib/localWorkData";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useDBStore } from "@/stores/useDBStore";
@@ -15,20 +15,32 @@ import TabBar from "@/components/app/shared/TabBar";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const bootstrapped = useRef(false);
 
   const { initDB, isReady } = useDBStore();
-  const { syncOnLogin, prefetchDriveIntoLocalStorage } = useSyncStore();
+  const { syncOnLogin, prefetchDriveIntoLocalStorage, syncIssue, clearSyncIssue } = useSyncStore();
   const { initPro } = useProStore();
   const { loadAll, saveProToken, saveGoogleRefreshToken } = useSettingsStore();
   const { loadSession } = useSessionStore();
   const { addToast, setStorageDurabilityWarning } = useUIStore();
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
 
   useEffect(() => {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
     bootstrap();
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try {
+      const done = localStorage.getItem("otiq_onboarding_done");
+      if (!done) setShowOnboarding(true);
+    } catch {
+      // ignore
+    }
   }, []);
 
   async function bootstrap() {
@@ -128,8 +140,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     // Storage durability check
     if (navigator.storage?.persisted) {
-      const persisted = await navigator.storage.persisted();
-      if (!persisted) setStorageDurabilityWarning(true);
+      let persisted = await navigator.storage.persisted();
+      if (!persisted && navigator.storage?.persist) {
+        persisted = await navigator.storage.persist();
+      }
+      setStorageDurabilityWarning(!persisted);
     }
 
     // Recover any interrupted punch-in session
@@ -147,11 +162,44 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       flexDirection: "column",
     }}>
       <StorageDurabilityBanner />
+      <SyncIssueBanner syncIssue={syncIssue} onDismiss={clearSyncIssue} />
       <TopBar />
       <main style={{ flex: 1, overflow: "auto" }}>
         {children}
       </main>
       <TabBar />
+      <OnboardingWalkthrough
+        pathname={pathname}
+        open={showOnboarding}
+        step={onboardingStep}
+        onNext={() => {
+          const currentRoute = ONBOARDING_STEPS[onboardingStep].route;
+          if (pathname !== currentRoute) {
+            router.push(currentRoute);
+            return;
+          }
+          if (onboardingStep >= ONBOARDING_STEPS.length - 1) {
+            try {
+              localStorage.setItem("otiq_onboarding_done", "1");
+            } catch {
+              // ignore
+            }
+            setShowOnboarding(false);
+            return;
+          }
+          const nextStep = onboardingStep + 1;
+          setOnboardingStep(nextStep);
+          router.push(ONBOARDING_STEPS[nextStep].route);
+        }}
+        onSkip={() => {
+          try {
+            localStorage.setItem("otiq_onboarding_done", "1");
+          } catch {
+            // ignore
+          }
+          setShowOnboarding(false);
+        }}
+      />
     </div>
   );
 }
@@ -199,6 +247,164 @@ function StorageDurabilityBanner() {
       <span>
         Your local data may be cleared by the browser. Drive sync is your backup — keep it active.
       </span>
+    </div>
+  );
+}
+
+function SyncIssueBanner({
+  syncIssue,
+  onDismiss,
+}: {
+  syncIssue: "drive_permission" | "drive_quota" | null;
+  onDismiss: () => void;
+}) {
+  if (!syncIssue) return null;
+
+  const message =
+    syncIssue === "drive_permission"
+      ? "Google Drive permission missing. Re-login and allow Drive access to keep backup sync working."
+      : "Google Drive is full. Free up space, then run Sync now in top bar.";
+
+  async function handleReconnectGoogle() {
+    const supabase = getSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  }
+
+  return (
+    <div style={{
+      padding: "10px 20px",
+      background: "#fff7ed",
+      borderBottom: "1px solid #d97706",
+      fontSize: "0.75rem",
+      color: "#92400e",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "12px",
+      flexWrap: "wrap",
+    }}>
+      <span>{message}</span>
+      <div style={{ display: "flex", gap: "8px" }}>
+        {syncIssue === "drive_permission" && (
+          <button
+            onClick={handleReconnectGoogle}
+            style={{
+              border: "1px solid #d97706",
+              background: "none",
+              color: "#92400e",
+              fontSize: "0.68rem",
+              fontFamily: "var(--font-mono)",
+              padding: "2px 8px",
+              cursor: "pointer",
+            }}
+          >
+            Reconnect
+          </button>
+        )}
+        <button
+          onClick={onDismiss}
+          style={{
+            border: "1px solid #d97706",
+            background: "none",
+            color: "#92400e",
+            fontSize: "0.68rem",
+            fontFamily: "var(--font-mono)",
+            padding: "2px 8px",
+            cursor: "pointer",
+          }}
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const ONBOARDING_STEPS: { title: string; body: string; route: "/log" | "/dashboard" | "/settings" }[] = [
+  {
+    title: "Track from Log tab",
+    body: "Start with Punch in for live timer, or use Manual entry for past shifts.",
+    route: "/log",
+  },
+  {
+    title: "Read trends in Dashboard",
+    body: "Switch timeframe, review hours and earnings, and compare status and location.",
+    route: "/dashboard",
+  },
+  {
+    title: "Set up in Settings",
+    body: "Add jobs, tune rates and currency, then use Sync now to back up to Drive.",
+    route: "/settings",
+  },
+];
+
+function OnboardingWalkthrough({
+  pathname,
+  open,
+  step,
+  onNext,
+  onSkip,
+}: {
+  pathname: string;
+  open: boolean;
+  step: number;
+  onNext: () => void;
+  onSkip: () => void;
+}) {
+  if (!open) return null;
+  const current = ONBOARDING_STEPS[step] ?? ONBOARDING_STEPS[0];
+  const onTargetRoute = pathname === current.route;
+  const isLast = step === ONBOARDING_STEPS.length - 1;
+
+  return (
+    <div style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(14,14,14,0.45)",
+      zIndex: 50,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "20px",
+    }}>
+      <div style={{
+        width: "100%",
+        maxWidth: "460px",
+        background: "#f5f0e8",
+        border: "1px solid #d1c9b8",
+        padding: "20px",
+        fontFamily: "var(--font-mono)",
+      }}>
+        <p style={{ margin: "0 0 8px", fontSize: "0.68rem", letterSpacing: "0.1em", color: "#6b6b5e", textTransform: "uppercase" }}>
+          Quick walkthrough · {step + 1}/{ONBOARDING_STEPS.length}
+        </p>
+        <p style={{ margin: "0 0 8px", fontFamily: "var(--font-serif)", fontSize: "1.45rem", color: "#0e0e0e", lineHeight: 1.2 }}>
+          {current.title}
+        </p>
+        <p style={{ margin: "0 0 16px", fontSize: "0.8rem", color: "#6b6b5e", lineHeight: 1.6 }}>
+          {current.body}
+        </p>
+        {!onTargetRoute && (
+          <p style={{ margin: "0 0 12px", fontSize: "0.72rem", color: "#d97706" }}>
+            Moving you to {current.route} for this step.
+          </p>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+          <button
+            onClick={onSkip}
+            style={{ border: "1px solid #d1c9b8", background: "none", color: "#6b6b5e", fontFamily: "var(--font-mono)", fontSize: "0.75rem", padding: "8px 12px", cursor: "pointer" }}
+          >
+            Skip
+          </button>
+          <button
+            onClick={onNext}
+            style={{ border: "none", background: "#0e0e0e", color: "#f5f0e8", fontFamily: "var(--font-mono)", fontSize: "0.75rem", padding: "8px 12px", cursor: "pointer" }}
+          >
+            {isLast ? "Finish" : "Next"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

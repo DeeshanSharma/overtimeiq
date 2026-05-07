@@ -1,4 +1,19 @@
+"use client";
+
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import Link from "next/link";
+import { useState } from "react";
+
 export default function WaitlistPage() {
+  const [loading, setLoading] = useState(false);
+
+  async function handleSignOutAndRelogin() {
+    setLoading(true);
+    const supabase = getSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  }
+
   return (
     <div style={{
       minHeight: "100vh",
@@ -26,9 +41,27 @@ export default function WaitlistPage() {
             The interesting engineering decisions beneath a simple-seeming product.
           </p>
         </div>
-        <a href="/" style={{ fontSize: "0.78rem", color: "#0e0e0e", textDecoration: "none", borderBottom: "1px solid currentColor" }}>
-          ← Back to homepage
-        </a>
+        <div style={{ display: "flex", gap: "12px", justifyContent: "center", flexWrap: "wrap" }}>
+          <Link href="/" style={{ fontSize: "0.78rem", color: "#0e0e0e", textDecoration: "none", borderBottom: "1px solid currentColor" }}>
+            ← Back to homepage
+          </Link>
+          <button
+            onClick={handleSignOutAndRelogin}
+            disabled={loading}
+            style={{
+              border: "none",
+              background: "none",
+              padding: 0,
+              fontSize: "0.78rem",
+              color: "#0e0e0e",
+              borderBottom: "1px solid currentColor",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
+            }}
+          >
+            {loading ? "Signing out…" : "Re-check invite status"}
+          </button>
+        </div>
       </div>
     </div>
   );

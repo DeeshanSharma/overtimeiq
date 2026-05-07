@@ -206,6 +206,9 @@ export default function DashboardPage() {
           borderBottom: '1px solid #d1c9b8',
           marginBottom: '24px',
           overflowX: 'auto',
+          scrollbarWidth: 'thin',
+          scrollbarColor: '#d1c9b8 transparent',
+          paddingBottom: '4px',
         }}>
         {(Object.keys(TIMEFRAME_LABELS) as Timeframe[]).map((tf) => (
           <button

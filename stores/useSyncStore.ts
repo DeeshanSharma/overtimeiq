@@ -28,6 +28,7 @@ const SYNC_SKEW_SECONDS = 30;
 let uploadInProgress = false;
 
 type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
+type SyncIssue = 'drive_permission' | 'drive_quota' | null;
 
 interface SyncState {
   /** Short-lived access token — stored in memory only, never persisted */
@@ -37,6 +38,7 @@ interface SyncState {
   driveFileId: string | null;
   /** Whether we're waiting to flush offline-queued uploads */
   hasPendingUpload: boolean;
+  syncIssue: SyncIssue;
 
   setAccessToken: (token: string) => void;
   /** Before initDB: list Drive, download DB into localStorage or clear blob if no remote file */
@@ -46,6 +48,7 @@ interface SyncState {
   uploadToDrive: () => Promise<void>;
   refreshToken: () => Promise<boolean>;
   setDriveFileId: (id: string) => void;
+  clearSyncIssue: () => void;
 }
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,6 +59,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   lastSyncedAt: null,
   driveFileId: null,
   hasPendingUpload: false,
+  syncIssue: null,
 
   setAccessToken: (token) => {
     set({ accessToken: token });
@@ -63,6 +67,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   setDriveFileId: (id) => set({ driveFileId: id }),
+  clearSyncIssue: () => set({ syncIssue: null }),
 
   prefetchDriveIntoLocalStorage: async (googleRefreshToken: string) => {
     try {
@@ -121,7 +126,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       }
 
       const { access_token } = await res.json();
-      set({ accessToken: access_token });
+      set({ accessToken: access_token, syncIssue: null });
       scheduleTokenRefresh();
       return true;
     } catch (err) {
@@ -147,7 +152,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       if (!res.ok) throw new Error(`Token fetch failed: ${await res.text()}`);
       const data = await res.json();
       token = data.access_token;
-      set({ accessToken: token });
+      set({ accessToken: token, syncIssue: null });
       scheduleTokenRefresh();
     } catch (err) {
       console.error('[useSyncStore] syncOnLogin — could not get access token:', err);
@@ -243,11 +248,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       }
       const stamp = driveMtime ?? new Date().toISOString();
       runSilent('UPDATE settings SET last_synced_at = ? WHERE id = 1', [stamp]);
-      set({ syncStatus: 'synced', lastSyncedAt: stamp, hasPendingUpload: false });
+      set({ syncStatus: 'synced', lastSyncedAt: stamp, hasPendingUpload: false, syncIssue: null });
       console.log('[useSyncStore] Drive sync complete');
     } catch (err) {
       console.error('[useSyncStore] uploadToDrive failed:', err);
-      set({ syncStatus: 'error', hasPendingUpload: true });
+      set({ syncStatus: 'error', hasPendingUpload: true, syncIssue: classifyDriveSyncIssue(err) });
     } finally {
       uploadInProgress = false;
     }
@@ -310,13 +315,13 @@ async function performSync(token: string, set: (partial: Partial<SyncState>) => 
 
     if (lastDriveMtime) {
       runSilent('UPDATE settings SET last_synced_at = ? WHERE id = 1', [lastDriveMtime]);
-      set({ syncStatus: 'synced', lastSyncedAt: lastDriveMtime });
+      set({ syncStatus: 'synced', lastSyncedAt: lastDriveMtime, syncIssue: null });
     } else {
-      set({ syncStatus: 'synced' });
+      set({ syncStatus: 'synced', syncIssue: null });
     }
   } catch (err) {
     console.error('[useSyncStore] performSync error:', err);
-    set({ syncStatus: 'error' });
+    set({ syncStatus: 'error', syncIssue: classifyDriveSyncIssue(err) });
   }
 }
 
@@ -395,6 +400,28 @@ async function uploadUpdate(fileId: string, buffer: Uint8Array, token: string): 
     body: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
   });
   if (!res.ok) throw new Error(`Drive update failed ${res.status}: ${await res.text()}`);
+}
+
+function classifyDriveSyncIssue(err: unknown): SyncIssue {
+  const text = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  if (
+    text.includes('storagequotaexceeded') ||
+    text.includes('quota') ||
+    text.includes('insufficientstorage') ||
+    text.includes('no space left')
+  ) {
+    return 'drive_quota';
+  }
+  if (
+    text.includes('insufficient') ||
+    text.includes('insufficientpermissions') ||
+    text.includes('insufficient permission') ||
+    text.includes('access denied') ||
+    text.includes('forbidden')
+  ) {
+    return 'drive_permission';
+  }
+  return null;
 }
 
 async function downloadFromDrive(fileId: string, token: string): Promise<void> {
