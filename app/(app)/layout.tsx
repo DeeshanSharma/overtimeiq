@@ -4,6 +4,7 @@ import TabBar from '@/components/app/shared/TabBar';
 import TopBar from '@/components/app/shared/TopBar';
 import { GOOGLE_REFRESH_LS_KEY, peekGoogleRefreshTokenFromLocalDb } from '@/lib/localWorkData';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { useDBStore } from '@/stores/useDBStore';
 import { useProStore } from '@/stores/useProStore';
 import { useSessionStore } from '@/stores/useSessionStore';
@@ -78,6 +79,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Store user profile in auth store
+    useAuthStore.getState().setUser({
+      id: user.id,
+      email: user.email ?? '',
+      name: user.user_metadata?.name ?? user.user_metadata?.full_name ?? user.email?.split('@')[0] ?? 'User',
+      avatar_url: user.user_metadata?.avatar_url ?? user.user_metadata?.picture ?? null,
+    });
+
     // 2. Check user access status
     const { data: userData } = await supabase.from('users').select('status').eq('id', user.id).single();
 
@@ -136,6 +145,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       syncOnLogin(googleRefreshToken).catch((err) => console.error('[AppLayout] syncOnLogin error:', err));
     } else {
       console.warn('[AppLayout] No google_refresh_token — Drive sync skipped');
+      // Set sync state to indicate reconnection needed
+      useSyncStore.getState().clearSyncIssue();
+      useSyncStore.setState({ syncStatus: 'offline', syncIssue: 'refresh_token_missing' });
     }
 
     // Wire the debounce trigger: every execSQL write → syncNow after 10s
@@ -188,28 +200,43 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         open={showOnboarding}
         step={onboardingStep}
         onNext={() => {
-          if (onboardingStep >= ONBOARDING_STEPS.length - 1) {
+          const currentStep = onboardingStep;
+          const currentRoute = ONBOARDING_STEPS[currentStep].route;
+          // First ensure we're on the correct route for current step
+          if (pathname !== currentRoute) {
+            router.push(currentRoute);
+            return;
+          }
+          // Now on correct route - advance to next step
+          if (currentStep >= ONBOARDING_STEPS.length - 1) {
             markOnboardingComplete();
             setShowOnboarding(false);
             return;
           }
-          const nextStep = onboardingStep + 1;
-          const nextRoute = ONBOARDING_STEPS[nextStep].route;
+          const nextStep = currentStep + 1;
           setOnboardingStep(nextStep);
-          // Only navigate if route actually changes
+          // Navigate if next step is on different route
+          const nextRoute = ONBOARDING_STEPS[nextStep].route;
           if (pathname !== nextRoute) {
             router.push(nextRoute);
           }
         }}
         onPrev={() => {
-          if (onboardingStep > 0) {
-            const prevStep = onboardingStep - 1;
-            const prevRoute = ONBOARDING_STEPS[prevStep].route;
-            setOnboardingStep(prevStep);
-            // Only navigate if route actually changes
-            if (pathname !== prevRoute) {
-              router.push(prevRoute);
-            }
+          const currentStep = onboardingStep;
+          if (currentStep === 0) return;
+          const currentRoute = ONBOARDING_STEPS[currentStep].route;
+          // First ensure we're on the correct route for current step
+          if (pathname !== currentRoute) {
+            router.push(currentRoute);
+            return;
+          }
+          // Now on correct route - go to prev step
+          const prevStep = currentStep - 1;
+          const prevRoute = ONBOARDING_STEPS[prevStep].route;
+          setOnboardingStep(prevStep);
+          // Navigate if prev step is on different route
+          if (pathname !== prevRoute) {
+            router.push(prevRoute);
           }
         }}
         onSkip={() => {
@@ -217,15 +244,23 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           setShowOnboarding(false);
         }}
         onSkipStep={() => {
-          if (onboardingStep >= ONBOARDING_STEPS.length - 1) {
+          const currentStep = onboardingStep;
+          const currentRoute = ONBOARDING_STEPS[currentStep].route;
+          // First ensure we're on the correct route for current step
+          if (pathname !== currentRoute) {
+            router.push(currentRoute);
+            return;
+          }
+          // Now on correct route - skip to next step
+          if (currentStep >= ONBOARDING_STEPS.length - 1) {
             markOnboardingComplete();
             setShowOnboarding(false);
             return;
           }
-          const nextStep = onboardingStep + 1;
-          const nextRoute = ONBOARDING_STEPS[nextStep].route;
+          const nextStep = currentStep + 1;
           setOnboardingStep(nextStep);
-          // Only navigate if route actually changes
+          // Navigate if next step is on different route
+          const nextRoute = ONBOARDING_STEPS[nextStep].route;
           if (pathname !== nextRoute) {
             router.push(nextRoute);
           }
@@ -290,51 +325,51 @@ function SyncIssueBanner({
   syncIssue,
   onDismiss,
 }: {
-  syncIssue: 'drive_permission' | 'drive_quota' | null;
+  syncIssue: 'drive_permission' | 'drive_quota' | 'wrong_account' | 'refresh_token_missing' | null;
   onDismiss: () => void;
 }) {
   if (!syncIssue) return null;
 
-  const message =
-    syncIssue === 'drive_permission'
-      ? 'Google Drive permission missing. Re-login and allow Drive access to keep backup sync working.'
-      : 'Google Drive is full. Free up space, then run Sync now in top bar.';
+  const messages: Record<typeof syncIssue, string> = {
+    drive_permission: 'Google Drive permission missing. Reconnect to restore backup sync.',
+    drive_quota: 'Google Drive is full. Free up space, then run Sync now.',
+    wrong_account: 'Wrong Google account selected. Your data belongs to a different account.',
+    refresh_token_missing: 'Google Drive connection lost. Please reconnect to backup your data.',
+  };
 
-  async function handleReconnectGoogle() {
-    const supabase = getSupabaseBrowserClient();
-    await supabase.auth.signOut();
-    window.location.href = '/login';
-  }
+  const router = useRouter();
 
   return (
     <div
       style={{
         padding: '10px 20px',
-        background: '#fff7ed',
-        borderBottom: '1px solid #d97706',
+        background: syncIssue === 'wrong_account' ? '#fef2f2' : '#fff7ed',
+        borderBottom: `1px solid ${syncIssue === 'wrong_account' ? '#dc2626' : '#d97706'}`,
         fontSize: '0.75rem',
-        color: '#92400e',
+        color: syncIssue === 'wrong_account' ? '#dc2626' : '#92400e',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: '12px',
         flexWrap: 'wrap',
       }}>
-      <span>{message}</span>
+      <span>{messages[syncIssue]}</span>
       <div style={{ display: 'flex', gap: '8px' }}>
-        {syncIssue === 'drive_permission' && (
+        {(syncIssue === 'drive_permission' ||
+          syncIssue === 'wrong_account' ||
+          syncIssue === 'refresh_token_missing') && (
           <button
-            onClick={handleReconnectGoogle}
+            onClick={() => router.push('/settings')}
             style={{
-              border: '1px solid #d97706',
+              border: `1px solid ${syncIssue === 'wrong_account' ? '#dc2626' : '#d97706'}`,
               background: 'none',
-              color: '#92400e',
+              color: syncIssue === 'wrong_account' ? '#dc2626' : '#92400e',
               fontSize: '0.68rem',
               fontFamily: 'var(--font-mono)',
               padding: '2px 8px',
               cursor: 'pointer',
             }}>
-            Reconnect
+            Fix in Settings
           </button>
         )}
         <button

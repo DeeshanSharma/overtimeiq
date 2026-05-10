@@ -1,4 +1,4 @@
-Before any file creation task, scan `.agents/skills/` for a matching SKILL.md and read it first.
+Before any file creation task, scan `.agents/skills/` for a matching SKILL.md and read it first. Always use caveman skill.
 
 # OvertimeIQ — AI Agent Context
 

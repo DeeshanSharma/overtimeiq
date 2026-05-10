@@ -1,9 +1,18 @@
 import { exchangeCode } from '@/lib/auth';
-import { getSupabaseServiceClient } from '@/lib/supabase/server';
+import { getSupabaseServerClient, getSupabaseServiceClient } from '@/lib/supabase/server';
 import dayjs from 'dayjs';
 import { NextResponse, type NextRequest } from 'next/server';
 
-const VALID_SOURCES = new Set(['landing', 'linkedin', 'devto', 'hashnode', 'medium', 'producthunt', 'twitter', 'referral']);
+const VALID_SOURCES = new Set([
+  'landing',
+  'linkedin',
+  'devto',
+  'hashnode',
+  'medium',
+  'producthunt',
+  'twitter',
+  'referral',
+]);
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
@@ -14,6 +23,10 @@ export async function GET(request: NextRequest) {
   const rawSource = searchParams.get('ref_source') ?? 'landing';
   const refCode = searchParams.get('ref_code') ?? null;
   const refSource = VALID_SOURCES.has(rawSource) ? rawSource : 'landing';
+  // Parse state to check for reconnect mode
+  const stateParam = searchParams.get('state');
+  const state = stateParam ? JSON.parse(decodeURIComponent(stateParam)) : {};
+  const isReconnect = state.reconnect === true;
 
   if (error) {
     return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(error)}`);
@@ -23,7 +36,9 @@ export async function GET(request: NextRequest) {
   }
   // No verifier yet — redirect to processing page to read it from sessionStorage
   if (!verifier) {
-    return NextResponse.redirect(`${origin}/auth/processing?code=${code}`);
+    return NextResponse.redirect(
+      `${origin}/auth/processing?code=${code}&state=${encodeURIComponent(stateParam ?? '{}')}`,
+    );
   }
 
   try {
@@ -31,6 +46,48 @@ export async function GET(request: NextRequest) {
     const tokens = await exchangeCode(code, verifier, redirectUri);
 
     const supabase = await getSupabaseServiceClient();
+
+    // ── RECONNECT MODE: validate email match without full re-auth ─────────
+    if (isReconnect) {
+      // Use server client (anon key) to read user session from cookies
+      const serverClient = await getSupabaseServerClient();
+      // Get current session to verify user is logged in
+      const {
+        data: { user },
+        error: sessionError,
+      } = await serverClient.auth.getUser();
+      if (sessionError || !user) {
+        return NextResponse.redirect(`${origin}/login?error=not_authenticated`);
+      }
+
+      // Decode ID token to get Google email
+      const idTokenPayload = JSON.parse(atob(tokens.id_token.split('.')[1]));
+      const googleEmail = idTokenPayload.email as string;
+      const currentEmail = user.email;
+
+      // Validate email match
+      if (googleEmail.toLowerCase() !== currentEmail?.toLowerCase()) {
+        // Wrong account - redirect to settings with error
+        return NextResponse.redirect(
+          `${origin}/settings?error=wrong_account&expected=${encodeURIComponent(currentEmail ?? '')}&got=${encodeURIComponent(googleEmail)}`,
+        );
+      }
+
+      // Email matches - save refresh token and redirect to settings
+      const response = NextResponse.redirect(`${origin}/settings?reconnect=success`);
+      if (tokens.refresh_token) {
+        response.cookies.set('g_rt_once', tokens.refresh_token, {
+          httpOnly: false,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 60,
+          path: '/',
+        });
+      }
+      return response;
+    }
+
+    // ── NORMAL LOGIN FLOW ────────────────────────────────────────────────
     const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({
       provider: 'google',
       token: tokens.id_token,

@@ -21,6 +21,7 @@ function ProcessingInner() {
   useEffect(() => {
     const code = searchParams.get('code');
     const error = searchParams.get('error');
+    const state = searchParams.get('state');
 
     if (error) {
       window.location.href = `/login?error=${encodeURIComponent(error)}`;
@@ -46,12 +47,13 @@ function ProcessingInner() {
     sessionStorage.removeItem('ref_source');
     sessionStorage.removeItem('ref_code');
 
-    // Send code + verifier + source to the server route
+    // Send code + verifier + source + state to the server route
     const params = new URLSearchParams({
       code,
       verifier,
       ref_source: refSource,
       ...(refCode ? { ref_code: refCode } : {}),
+      ...(state ? { state } : {}),
     });
     window.location.href = `/auth/callback?${params.toString()}`;
   }, [searchParams]);

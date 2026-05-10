@@ -15,9 +15,9 @@
 import { DB_STORAGE_KEY } from '@/lib/localWorkData';
 import { create } from 'zustand';
 // Token refresh is server-side via /api/google-token (GOOGLE_CLIENT_SECRET not available in browser)
+import { useDBStore } from './useDBStore';
 import { useSessionStore } from './useSessionStore';
 import { useSettingsStore } from './useSettingsStore';
-import { useDBStore } from './useDBStore';
 
 const DRIVE_API = 'https://www.googleapis.com/drive';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive';
@@ -28,7 +28,7 @@ const SYNC_SKEW_SECONDS = 30;
 let uploadInProgress = false;
 
 type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
-type SyncIssue = 'drive_permission' | 'drive_quota' | null;
+type SyncIssue = 'drive_permission' | 'drive_quota' | 'wrong_account' | 'refresh_token_missing' | null;
 
 interface SyncState {
   /** Short-lived access token — stored in memory only, never persisted */
@@ -108,6 +108,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     if (!rt) {
       console.warn('[useSyncStore] No google_refresh_token in SQLite');
+      set({ syncIssue: 'refresh_token_missing', syncStatus: 'offline' });
       return false;
     }
 
@@ -347,10 +348,7 @@ async function driveGet(url: string, token: string): Promise<Record<string, unkn
 
 /** Drive's modifiedTime (RFC3339) — store as last_synced_at so all devices compare on same clock */
 async function fetchDriveFileModifiedTime(fileId: string, token: string): Promise<string> {
-  const meta = await driveGet(
-    `${DRIVE_API}/v3/files/${encodeURIComponent(fileId)}?fields=modifiedTime`,
-    token,
-  );
+  const meta = await driveGet(`${DRIVE_API}/v3/files/${encodeURIComponent(fileId)}?fields=modifiedTime`, token);
   const mt = meta.modifiedTime as string | undefined;
   if (!mt) throw new Error('Drive metadata missing modifiedTime');
   return mt;
