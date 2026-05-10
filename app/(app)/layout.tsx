@@ -112,11 +112,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       googleRefreshToken = await peekGoogleRefreshTokenFromLocalDb();
     }
 
-    // Probe Drive + optional download into localStorage before sql.js opens (stops empty local overwriting Drive)
-    if (googleRefreshToken) {
-      await prefetchDriveIntoLocalStorage(googleRefreshToken);
-    }
-
     await initDB();
 
     if (useDBStore.getState().error) {
@@ -129,15 +124,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     loadAll();
 
+    // Save cookie token to SQLite only if we don't already have a valid token in DB
+    // (avoids overwriting a cleared invalid token with the same invalid token from cookie)
     if (rtFromCookie) {
-      saveGoogleRefreshToken(rtFromCookie);
+      const existingToken = useDBStore.getState().getOne('SELECT google_refresh_token FROM settings WHERE id = 1')
+        ?.google_refresh_token as string | undefined;
+      if (!existingToken) {
+        saveGoogleRefreshToken(rtFromCookie);
+      }
       document.cookie = 'g_rt_once=; path=/; max-age=0';
     }
 
-    if (!googleRefreshToken) {
-      const row = useDBStore.getState().getOne('SELECT google_refresh_token FROM settings WHERE id = 1');
-      googleRefreshToken = (row?.google_refresh_token as string) ?? null;
+    // Probe Drive + optional download into localStorage (now that DB is ready for cleanup on invalid_grant)
+    if (googleRefreshToken) {
+      await prefetchDriveIntoLocalStorage(googleRefreshToken);
     }
+
+    // Re-read from DB — prefetch may have cleared the token due to invalid_grant
+    const row = useDBStore.getState().getOne('SELECT google_refresh_token FROM settings WHERE id = 1');
+    googleRefreshToken = (row?.google_refresh_token as string) ?? null;
 
     // Drive sync — reconcile timestamps / upload if needed
     if (googleRefreshToken) {

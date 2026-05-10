@@ -70,6 +70,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   clearSyncIssue: () => set({ syncIssue: null }),
 
   prefetchDriveIntoLocalStorage: async (googleRefreshToken: string) => {
+    const { runSilent } = useDBStore.getState();
     try {
       const res = await fetch('/api/google-token', {
         method: 'POST',
@@ -77,7 +78,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         credentials: 'include',
         body: JSON.stringify({ refresh_token: googleRefreshToken }),
       });
-      if (!res.ok) throw new Error(`Token fetch failed: ${await res.text()}`);
+      if (!res.ok) {
+        const errorText = await res.text();
+        if (errorText.includes('invalid_grant')) {
+          runSilent('UPDATE settings SET google_refresh_token = NULL WHERE id = 1', []);
+          set({ syncIssue: 'refresh_token_missing', syncStatus: 'offline' });
+          return;
+        }
+        throw new Error(`Token fetch failed: ${errorText}`);
+      }
       const { access_token } = await res.json();
       const searchRes = await driveGet(
         `${DRIVE_API}/v3/files?q=name%3D'${DB_FILENAME}'%20and%20trashed%3Dfalse&fields=files(id)`,
@@ -102,7 +111,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   // ── Token refresh (server-side to keep client_secret off the browser) ──────
   refreshToken: async (): Promise<boolean> => {
-    const { getOne } = useDBStore.getState();
+    const { getOne, runSilent } = useDBStore.getState();
     const row = getOne('SELECT google_refresh_token FROM settings WHERE id = 1');
     const rt = row?.google_refresh_token as string | null;
 
@@ -122,7 +131,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       });
 
       if (!res.ok) {
-        console.warn('[useSyncStore] Token refresh failed:', await res.text());
+        const errorText = await res.text();
+        console.warn('[useSyncStore] Token refresh failed:', errorText);
+        if (errorText.includes('invalid_grant')) {
+          runSilent('UPDATE settings SET google_refresh_token = NULL WHERE id = 1', []);
+          set({ syncIssue: 'refresh_token_missing', syncStatus: 'offline', accessToken: null });
+        }
         return false;
       }
 
@@ -138,6 +152,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   // ── Called once after login bootstrap ────────────────────────────────────
   syncOnLogin: async (googleRefreshToken: string) => {
+    const { runSilent } = useDBStore.getState();
     set({ syncStatus: 'syncing' });
 
     // Get an access token — use the just-received refresh token directly
@@ -150,7 +165,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         credentials: 'include',
         body: JSON.stringify({ refresh_token: googleRefreshToken }),
       });
-      if (!res.ok) throw new Error(`Token fetch failed: ${await res.text()}`);
+      if (!res.ok) {
+        const errorText = await res.text();
+        if (errorText.includes('invalid_grant')) {
+          runSilent('UPDATE settings SET google_refresh_token = NULL WHERE id = 1', []);
+          set({ syncIssue: 'refresh_token_missing', syncStatus: 'offline', accessToken: null });
+          return;
+        }
+        throw new Error(`Token fetch failed: ${errorText}`);
+      }
       const data = await res.json();
       token = data.access_token;
       set({ accessToken: token, syncIssue: null });
