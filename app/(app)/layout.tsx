@@ -195,9 +195,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         display: 'flex',
         flexDirection: 'column',
       }}>
+      <TopBar />
       <StorageDurabilityBanner />
       <SyncIssueBanner syncIssue={syncIssue} onDismiss={clearSyncIssue} />
-      <TopBar />
       <main style={{ flex: 1, overflow: 'auto' }}>{children}</main>
       <TabBar />
       <OnboardingWalkthrough
@@ -311,6 +311,9 @@ function StorageDurabilityBanner() {
   return (
     <div
       style={{
+        position: 'sticky',
+        top: '41px', // TopBar height (12px padding top + ~17px content height + 12px padding bottom)
+        zIndex: 9,
         padding: '10px 20px',
         background: '#fef3c7',
         borderBottom: '1px solid #d97706',
@@ -347,6 +350,9 @@ function SyncIssueBanner({
   return (
     <div
       style={{
+        position: 'sticky',
+        top: '41px', // TopBar height (12px padding top + ~17px content height + 12px padding bottom)
+        zIndex: 9,
         padding: '10px 20px',
         background: syncIssue === 'wrong_account' ? '#fef2f2' : '#fff7ed',
         borderBottom: `1px solid ${syncIssue === 'wrong_account' ? '#dc2626' : '#d97706'}`,
