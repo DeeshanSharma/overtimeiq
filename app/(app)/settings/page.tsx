@@ -135,8 +135,6 @@ export default function SettingsPage() {
 
       sessionStorage.setItem('pkce_verifier', verifier);
 
-      console.log({ email: user?.email });
-
       const params = new URLSearchParams({
         client_id: GOOGLE_CLIENT_ID,
         redirect_uri: `${window.location.origin}/auth/callback`,
@@ -389,17 +387,6 @@ export default function SettingsPage() {
                 disabled={reconnecting}
                 style={{ ...outlineBtn, fontSize: '0.7rem', padding: '6px 12px' }}>
                 {reconnecting ? 'Connecting…' : 'Reconnect Google Drive'}
-              </button>
-              <button
-                onClick={handleDownloadDB}
-                style={{
-                  ...outlineBtn,
-                  fontSize: '0.7rem',
-                  padding: '6px 12px',
-                  borderColor: '#6b6b5e',
-                  color: '#6b6b5e',
-                }}>
-                Download backup
               </button>
             </div>
             {reconnectError && (
