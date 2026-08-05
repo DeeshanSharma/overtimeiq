@@ -11,32 +11,32 @@ All charts go in `app/(app)/dashboard/page.tsx` alongside the existing KPI strip
 Use Recharts. Import from `"recharts"`. Wrap every chart in `ResponsiveContainer width="100%" height={240}`.
 Earnings data comes from running `calcEntryEarning()` from `lib/earnings.ts` on each log row — do not store earnings in SQLite.
 
-- [ ] **Cumulative earnings line chart**
+- [x] **Cumulative earnings line chart**
   - Recharts `LineChart` with a single `Line` for running total earnings over time
   - X-axis: date labels (abbreviated). Y-axis: currency symbol from settings
   - Green `#16a34a` stroke, light green `#f0fdf4` area fill using `linearGradient`
   - Respects timeframe filter and job filter already wired in the page
   - Shows "No data" empty state if zero logs in range
 
-- [ ] **Location donut chart**
+- [x] **Location donut chart**
   - Recharts `PieChart` with `innerRadius={60}` (donut style)
   - Three segments: office / home / client
   - Colors: office `#0e0e0e`, home `#3B8BD4`, client `#d97706`
   - Centre label: total hours. Legend below with hour counts
 
-- [ ] **Shift-type donut chart**
+- [x] **Shift-type donut chart**
   - Same structure as location donut
   - Three segments: weekday / weekend / holiday (derived from `getMultiplier()` per log entry)
   - Colors: weekday `#6b6b5e`, weekend `#3B8BD4`, holiday `#d97706`
 
-- [ ] **Burnout gauge**
+- [x] **Burnout gauge**
   - Half-donut (180 degree arc). Value = total hours this week vs `settings.burnout_threshold_hours`
   - Color: green `#16a34a` when below 70% of threshold, amber `#d97706` at 70-99%, red `#dc2626` at 100%+
   - Centre text: `Xh / Yh` where Y is the threshold
   - "This week" is always the current ISO week regardless of the timeframe tab
   - Build with Recharts `PieChart` using `startAngle={180}` `endAngle={0}`
 
-- [ ] **Earnings by rate tier stacked bar chart**
+- [x] **Earnings by rate tier stacked bar chart**
   - Recharts `BarChart` stacked
   - Three segments per bar: base earnings / weekend premium / holiday premium
   - Premium = (multiplier - 1.0) x hours x hourly_rate for that segment
